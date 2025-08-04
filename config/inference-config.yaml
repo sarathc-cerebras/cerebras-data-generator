@@ -1,0 +1,41 @@
+
+models_to_run:
+  - "qwen-3-235b-a22b-instruct-2507"
+
+# Concurrency and Rate Limiting
+concurrency:
+  max_concurrent_requests: 10
+  initial_retry_delay: 1.0
+  max_retry_delay: 60.0
+  max_retries: 5
+
+# Load Monitoring
+load_monitoring:
+  ttft_threshold: 5.0
+  request_timeout: 120.0
+
+
+generation:
+  stream: false
+  max_completion_tokens: 20000
+  temperature: 0.7
+  top_p: 0.8
+  seed: 1
+
+
+# Input and Output files
+dataset:
+  repo_type: hf
+  output: "data/output/gsm8k_generated.parquet"
+  n_samples: 1
+  hf:
+    repo: "openai/gsm8k" 
+    subset: "main"
+    split: "test"
+  local:
+    format: "parquet"
+    data_files: "../data/input/gsm8k_test.parquet"
+    split: "test"
+  take: 2
+  rename_columns:
+    - ["question", "prompt"]
