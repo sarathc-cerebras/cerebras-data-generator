@@ -98,8 +98,9 @@ async def send_request(
                     await asyncio.sleep(retry_delay)
                     retry_delay = min(retry_delay * 2, max_retry_delay)
                 else:
-                    logging.error(f"An unrecoverable API error occurred for model {payload['model']}: {e.status_code} - {e.response}")
-                    return {"success": False, "model": payload['model'], "error": str(e)}
+                    error_message = f"APIStatusError: {e.status_code} - {str(e)}"
+                    logging.error(f"An unrecoverable API error occurred for model {payload['model']}: {error_message}")
+                    return {"success": False, "model": payload['model'], "error": error_message}
 
             except Exception as e:
                 logging.error(f"An unexpected error occurred: {e}")
