@@ -72,9 +72,29 @@ async def send_request(
                 retry_delay = min(retry_delay * 2, max_retry_delay)  # Exponential backoff
 
             except APIStatusError as e:
-                # Handle specific API status codes for retries, like 429 (rate limits) and 503 (availability)
-                if e.status_code in [429, 503]:
-                    logging.warning(f"Retryable API error {e.status_code} (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {retry_delay:.2f}s...")
+                # Handle specific API status codes for retries
+                if e.status_code == 429:
+                    # Use the specific retry-after hint from the header if available
+                    reset_header = e.response.headers.get("x-ratelimit-reset-tokens-minute")
+                    if reset_header:
+                        try:
+                            wait_time = float(reset_header) + 1  # Add a 1s buffer to be safe
+                            logging.warning(f"Rate limit hit. Waiting for {wait_time:.2f} seconds as per response header.")
+                            await asyncio.sleep(wait_time)
+                        except (ValueError, TypeError):
+                            # Fallback to exponential backoff if header is not a valid number
+                            logging.warning(f"Rate limit hit, but couldn't parse reset header. Retrying in {retry_delay:.2f}s...")
+                            await asyncio.sleep(retry_delay)
+                            retry_delay = min(retry_delay * 2, max_retry_delay)
+                    else:
+                        # Fallback if the header is missing
+                        logging.warning(f"Rate limit hit, but no reset header found. Retrying in {retry_delay:.2f}s...")
+                        await asyncio.sleep(retry_delay)
+                        retry_delay = min(retry_delay * 2, max_retry_delay)
+
+                elif e.status_code == 503:
+                    # Handle service availability with exponential backoff
+                    logging.warning(f"Service unavailable (503) (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {retry_delay:.2f}s...")
                     await asyncio.sleep(retry_delay)
                     retry_delay = min(retry_delay * 2, max_retry_delay)
                 else:
