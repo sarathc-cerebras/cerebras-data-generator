@@ -26,7 +26,8 @@ generation:
 # Input and Output files
 dataset:
   repo_type: hf
-  output: "data/output/gsm8k_generated.parquet"
+  output: "data/output/gsm8k_generated.jsonl"
+  batch_size: 2 # Number of prompts to process before saving results
   n_samples: 1
   hf:
     repo: "openai/gsm8k" 
@@ -36,6 +37,6 @@ dataset:
     format: "parquet"
     data_files: "../data/input/gsm8k_test.parquet"
     split: "test"
-  take: 2
+  take: 5
   rename_columns:
     - ["question", "prompt"]

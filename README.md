@@ -63,7 +63,8 @@ generation:
 dataset:
   repo_type: hf                # 'hf' for Hugging Face, 'local' for local files
   output: "data/output/gsm8k_generated.jsonl" # Path to save results
-
+  batch_size: 1000 # Number of prompts to process before saving results
+  
   # --- Hugging Face dataset options ---
   hf:
     repo: "openai/gsm8k"       # HF repository name
