@@ -72,9 +72,9 @@ async def send_request(
                 retry_delay = min(retry_delay * 2, max_retry_delay)  # Exponential backoff
 
             except APIStatusError as e:
-                # Handle specific API status codes, like 503 Service Unavailable, for retries
-                if e.status_code == 503:
-                    logging.warning(f"Service unavailable (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {retry_delay:.2f}s...")
+                # Handle specific API status codes for retries, like 429 (rate limits) and 503 (availability)
+                if e.status_code in [429, 503]:
+                    logging.warning(f"Retryable API error {e.status_code} (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {retry_delay:.2f}s...")
                     await asyncio.sleep(retry_delay)
                     retry_delay = min(retry_delay * 2, max_retry_delay)
                 else:
