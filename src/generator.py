@@ -80,7 +80,7 @@ async def send_request(
                         logging.warning("Could not parse daily rate limit remaining header.")
 
                     reset_tokens_header = e.response.headers.get("x-ratelimit-reset-tokens-minute")
-                    wait_time = config['concurrency']['initial_retry_delay']
+                    wait_time = -1
                     try:
                         if reset_tokens_header:
                             wait_time = float(reset_tokens_header) + 1
@@ -89,7 +89,15 @@ async def send_request(
                             logging.warning(f"Rate limit hit. No reset header found. Retrying in {wait_time:.2f}s...")
                     except (ValueError, TypeError):
                         logging.warning(f"Could not parse token reset header. Retrying in {wait_time:.2f}s...")
-                    await asyncio.sleep(wait_time)
+                        
+                    if wait_time > 0:
+                        await asyncio.sleep(wait_time)
+                    else:
+                        # Fallback to exponential backoff if header is missing/invalid
+                        logging.warning(f"Rate limit hit. No reset header found. Retrying in {retry_delay:.2f}s...")
+                        await asyncio.sleep(retry_delay)
+                        retry_delay = min(retry_delay * 2, max_retry_delay)
+                
                 elif e.status_code == 503:
                     logging.warning(f"Service unavailable (503) (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {retry_delay:.2f}s...")
                     await asyncio.sleep(retry_delay)
