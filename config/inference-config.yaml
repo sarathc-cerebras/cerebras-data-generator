@@ -26,17 +26,18 @@ generation:
 # Input and Output files
 dataset:
   repo_type: hf
-  output: "data/output/gsm8k_generated.jsonl"
-  batch_size: 2 # Number of prompts to process before saving results
+  output: "data/output/baai_infinity_instruct_core_generated.jsonl"
+  batch_size: 100 # Number of prompts to process before saving results
   n_samples: 1
   hf:
-    repo: "openai/gsm8k" 
-    subset: "main"
-    split: "test"
+    repo: "BAAI/Infinity-Instruct" 
+    subset: "7M_core"
+    split: "train"
+    num_proc: 90
   local:
     format: "parquet"
     data_files: "../data/input/gsm8k_test.parquet"
     split: "test"
-  take: 5
-  rename_columns:
-    - ["question", "prompt"]
+  # take: 1000
+  # rename_columns:
+  #   - ["conversations", "prompt"]

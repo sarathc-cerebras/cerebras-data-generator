@@ -6,7 +6,7 @@ import json
 import yaml
 from datasets import load_dataset
 import tqdm.asyncio
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Dict, Any, List, Optional
 
 from httpx import ConnectError, ReadTimeout
 from cerebras.cloud.sdk import (
@@ -28,7 +28,7 @@ async def send_request(
     payload: Dict[str, Any],
     semaphore: asyncio.Semaphore,
     config: Dict[str, Any]
-):
+) -> Dict[str, Any]:
     """Sends a single request using the Cerebras SDK, measures TTFT, and handles retries."""
     ttft_threshold = config['load_monitoring']['ttft_threshold']
     max_retries = config['concurrency']['max_retries']
@@ -85,10 +85,8 @@ async def send_request(
                         if reset_tokens_header:
                             wait_time = float(reset_tokens_header) + 1
                             logging.warning(f"Per-minute token limit reached. Waiting for {wait_time:.2f}s...")
-                        else:
-                            logging.warning(f"Rate limit hit. No reset header found. Retrying in {wait_time:.2f}s...")
                     except (ValueError, TypeError):
-                        logging.warning(f"Could not parse token reset header. Retrying in {wait_time:.2f}s...")
+                        logging.warning("Could not parse token reset header.")
                         
                     if wait_time > 0:
                         await asyncio.sleep(wait_time)
@@ -113,12 +111,15 @@ async def send_request(
         return {"success": False, "model": payload['model'], "error": "Max retries exceeded"}
 
 # --- Data and Environment Setup Functions ---
-def get_dataset(config: Dict[str, Any]) -> Any:
-    """Loads and configures the dataset based on the provided configuration."""
+def get_dataset(config: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Loads and configures the dataset based on the provided configuration.
+    Returns the list of dataset items to be processed.
+    """
     dataset_config = config["dataset"]
     if dataset_config["repo_type"] == "hf":
         hf_config = dataset_config["hf"]
-        dataset = load_dataset(hf_config["repo"], hf_config.get("subset"), split=hf_config["split"])
+        dataset = load_dataset(hf_config["repo"], hf_config.get("subset"), split=hf_config["split"], num_proc=hf_config["num_proc"])
     else:
         local_config = dataset_config["local"]
         dataset = load_dataset(local_config["format"], data_files=local_config["data_files"], split=local_config["split"])
@@ -130,7 +131,8 @@ def get_dataset(config: Dict[str, Any]) -> Any:
             dataset = dataset.rename_column(old, new)
     if "select_columns" in dataset_config:
         dataset = dataset.select_columns(dataset_config["select_columns"])
-    return dataset
+    
+    return list(dataset)
 
 def load_configuration(config_path: str) -> Optional[Dict[str, Any]]:
     """Loads the YAML configuration file."""
@@ -149,51 +151,120 @@ def get_resume_offset(output_file: str) -> int:
     logging.info(f"Output file found at {output_file}. Checking for progress to resume.")
     try:
         with open(output_file, "r") as f:
-            # Simply count the lines. The interpretation happens in main().
             return sum(1 for _ in f)
     except Exception as e:
         logging.warning(f"Could not read checkpoint file at {output_file}: {e}. Starting from scratch.")
         return 0
 
+async def process_single_item(
+    item: Dict[str, Any],
+    client: AsyncCerebras,
+    semaphore: asyncio.Semaphore,
+    config: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Processes a single multi-turn conversation item.
+    It iterates through human prompts, generates responses, and builds the conversation history.
+    """
+    if "conversations" not in item or not isinstance(item["conversations"], list):
+        logging.warning(f"Skipping item due to missing or invalid 'conversations' field: {item}")
+        return {"success": False, "error": "Invalid item format"}
+
+    human_prompts = [turn["value"] for turn in item["conversations"] if turn.get("from") == "human"]
+    if not human_prompts:
+        logging.warning(f"Skipping item as no 'human' turn was found: {item}")
+        return {"success": False, "error": "No human prompts found"}
+
+    generation_params = config.get('generation', {})
+    model = config['models_to_run'][0] # Assuming one model for multi-turn for simplicity
+    
+    conversation_history = []
+    final_generated_conversation = []
+
+    for prompt in human_prompts:
+        conversation_history.append({"role": "user", "content": prompt})
+        final_generated_conversation.append({"from": "human", "value": prompt})
+
+        payload = {"model": model, "messages": conversation_history, **generation_params}
+        
+        result = await send_request(client, payload, semaphore, config)
+
+        if result and result.get("success"):
+            gpt_response = result["response"]
+            conversation_history.append({"role": "assistant", "content": gpt_response})
+            final_generated_conversation.append({"from": "gpt", "value": gpt_response})
+        else:
+            error_msg = result.get('error', 'Unknown error during generation')
+            logging.error(f"Failed to get response for a turn. Halting generation for this item. Error: {error_msg}")
+            return {"success": False, "error": f"Generation failed for item: {error_msg}"}
+
+    return {
+        "success": True,
+        "result": {
+            "id": item.get("id", "unknown"),
+            "conversations": final_generated_conversation,
+            "label": item.get("label", "unknown"),
+            "langdetect": item.get("langdetect", "unknown"),
+            "source": item.get("source", "unknown"),
+            "reward": item.get("reward", 0),
+            "model": model
+        }
+    }
+
+
 # --- Main Processing Loop ---
 async def process_batches(
-    prompts: List[str],
+    original_data: List[Dict[str, Any]],
     config: Dict[str, Any],
     resume_offset: int
 ):
     """Initializes clients and runs the main inference loop over the data batches."""
     client = AsyncCerebras()
     semaphore = asyncio.Semaphore(config['concurrency']['max_concurrent_requests'])
-    generation_params = config.get('generation', {})
     batch_size = config.get('dataset', {}).get('batch_size', 1000)
-    output_file = f"../{config['dataset']['output']}"
+    output_file = f"{config['dataset']['output']}"
+
+    if len(config.get('models_to_run', [])) > 1:
+        logging.warning("Multi-turn conversation logic currently supports one model at a time. Using the first model specified.")
 
     total_successful = resume_offset
     total_failed = 0
-    remaining_prompts = prompts[resume_offset:]
+    
+    remaining_data = original_data[resume_offset:]
 
-    with tqdm.asyncio.tqdm(total=len(prompts), desc="LLM batch inference", initial=resume_offset) as pbar:
-        for i in range(0, len(remaining_prompts), batch_size):
-            batch_prompts = remaining_prompts[i:i + batch_size]
-            tasks = []
-            for model in config['models_to_run']:
-                for prompt_content in batch_prompts:
-                    payload = {"model": model, "messages": [{"role": "user", "content": prompt_content}], **generation_params}
-                    tasks.append(send_request(client, payload, semaphore, config))
+    with tqdm.asyncio.tqdm(total=len(original_data), desc="LLM multi-turn inference", initial=resume_offset) as pbar:
+        for i in range(0, len(remaining_data), batch_size):
+            batch_data = remaining_data[i:i + batch_size]
+            
+            tasks = [
+                asyncio.create_task(process_single_item(item, client, semaphore, config))
+                for item in batch_data
+            ]
             
             try:
-                batch_results = await asyncio.gather(*tasks)
-                successful_generations = [r for r in batch_results if r and r.get("success")]
-                failed_generations = [r for r in batch_results if not r or not r.get("success")]
+                batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                successful_generations = []
+                failed_count = 0
+                for res in batch_results:
+                    if isinstance(res, Exception):
+                        logging.error(f"Task failed with exception: {res}")
+                        failed_count += 1
+                        continue
+
+                    if res and res.get("success"):
+                        successful_generations.append(res["result"])
+                    else:
+                        failed_count += 1
 
                 total_successful += len(successful_generations)
-                total_failed += len(failed_generations)
+                total_failed += failed_count
 
                 if successful_generations:
                     with open(output_file, "a") as f:
-                        for res in successful_generations:
-                            f.write(json.dumps(res) + "\n")
-                pbar.update(len(batch_prompts))
+                        for item in successful_generations:
+                            f.write(json.dumps(item) + "\n")
+                pbar.update(len(batch_data))
 
             except DailyRateLimitError as e:
                 logging.critical(f"Execution stopped due to fatal daily rate limit: {e}")
@@ -201,7 +272,7 @@ async def process_batches(
             except Exception as e:
                 logging.error(f"An unexpected error occurred during batch processing: {e}. Moving to next batch.")
                 total_failed += len(tasks)
-                pbar.update(len(batch_prompts))
+                pbar.update(len(batch_data))
 
     logging.info(f"Completed. Total Success: {total_successful}, Total Failed: {total_failed}")
     if total_successful > 0:
@@ -214,34 +285,25 @@ async def main():
         logging.error("API key not found. Please set the CEREBRAS_API_KEY environment variable.")
         return
 
-    config = load_configuration("../config/inference-config.yaml")
+    config = load_configuration("config/inference-config.yaml")
     if not config:
         return
 
-    prompts = get_dataset(config).to_pandas()["prompt"].tolist()
-    logging.info(f"Loaded {len(prompts)} total prompts from the dataset.")
+    original_data = get_dataset(config)
+    if not original_data:
+        logging.error("No data could be loaded from the dataset. Please check the dataset format and configuration.")
+        return
+        
+    logging.info(f"Loaded {len(original_data)} total items from the dataset.")
 
-    output_file = f"../{config['dataset']['output']}"
+    output_file = f"{config['dataset']['output']}"
     
-    processed_lines = get_resume_offset(output_file)
-    num_models = len(config.get('models_to_run', [1]))
-    if num_models == 0:
-        num_models = 1 # Avoid division by zero
+    resume_offset = get_resume_offset(output_file)
+    
+    if resume_offset > 0:
+        logging.info(f"Resuming from checkpoint. Skipping {resume_offset} items already processed.")
 
-    # Ensure we only resume after a complete batch of models for a prompt
-    if processed_lines % num_models != 0:
-        logging.warning(
-            f"Output file contains a partial result for a prompt ({processed_lines} lines for {num_models} models). "
-            "Resuming from the last fully completed prompt."
-        )
-    
-    # Calculate the number of prompts to skip
-    resume_offset_prompts = processed_lines // num_models
-    
-    if resume_offset_prompts > 0:
-        logging.info(f"Resuming from checkpoint. {resume_offset_prompts} prompts already processed.")
-
-    await process_batches(prompts, config, resume_offset_prompts)
+    await process_batches(original_data, config, resume_offset)
 
 if __name__ == "__main__":
     asyncio.run(main())
