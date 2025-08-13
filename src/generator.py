@@ -4,6 +4,7 @@ import logging
 import os
 import json
 import yaml
+import random
 from datasets import load_dataset
 import tqdm.asyncio
 from typing import Dict, Any, List, Optional
@@ -19,6 +20,27 @@ class DailyRateLimitError(Exception):
     """Raised when the daily API request limit is reached."""
     pass
 
+# --- Concurrency Manager ---
+class ConcurrencyManager:
+    """Manages the dynamic concurrency level."""
+    def __init__(self, initial_concurrency: int, min_concurrency: int = 1):
+        self._concurrency = initial_concurrency
+        self._min_concurrency = min_concurrency
+        self._lock = asyncio.Lock()
+        self.adjustment_needed = False
+
+    @property
+    def level(self) -> int:
+        return self._concurrency
+
+    async def reduce_concurrency(self):
+        """Safely reduces the concurrency level by 1."""
+        async with self._lock:
+            if self._concurrency > self._min_concurrency:
+                self._concurrency -= 1
+                self.adjustment_needed = True
+                logging.warning(f"High TTFT detected. Reducing concurrency level to {self._concurrency}.")
+
 # Logging Setup
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -27,7 +49,8 @@ async def send_request(
     client: AsyncCerebras,
     payload: Dict[str, Any],
     semaphore: asyncio.Semaphore,
-    config: Dict[str, Any]
+    config: Dict[str, Any],
+    concurrency_manager: ConcurrencyManager
 ) -> Dict[str, Any]:
     """Sends a single request using the Cerebras SDK, measures TTFT, and handles retries."""
     ttft_threshold = config['load_monitoring']['ttft_threshold']
@@ -53,7 +76,7 @@ async def send_request(
                             first_chunk_received = True
                             logging.info(f"TTFT for request (model: {payload['model']}): {ttft:.2f}s")
                             if ttft > ttft_threshold:
-                                logging.warning(f"High TTFT detected: {ttft:.2f}s. Consider reducing concurrency.")
+                                await concurrency_manager.reduce_concurrency()
                         if chunk.choices and chunk.choices[0].delta.content:
                             full_response += chunk.choices[0].delta.content
                 else:
@@ -98,7 +121,7 @@ async def send_request(
                 
                 elif e.status_code == 503:
                     logging.warning(f"Service unavailable (503) (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {retry_delay:.2f}s...")
-                    await asyncio.sleep(retry_delay)
+                    await asyncio.sleep(retry_delay + random.uniform(0, 1)) # Add jitter
                     retry_delay = min(retry_delay * 2, max_retry_delay)
                 else:
                     error_message = f"APIStatusError: {e.status_code} - {str(e)}"
@@ -160,7 +183,8 @@ async def process_single_item(
     item: Dict[str, Any],
     client: AsyncCerebras,
     semaphore: asyncio.Semaphore,
-    config: Dict[str, Any]
+    config: Dict[str, Any],
+    concurrency_manager: ConcurrencyManager
 ) -> Dict[str, Any]:
     """
     Processes a single multi-turn conversation item.
@@ -187,7 +211,7 @@ async def process_single_item(
 
         payload = {"model": model, "messages": conversation_history, **generation_params}
         
-        result = await send_request(client, payload, semaphore, config)
+        result = await send_request(client, payload, semaphore, config, concurrency_manager)
 
         if result and result.get("success"):
             gpt_response = result["response"]
@@ -220,7 +244,8 @@ async def process_batches(
 ):
     """Initializes clients and runs the main inference loop over the data batches."""
     client = AsyncCerebras()
-    semaphore = asyncio.Semaphore(config['concurrency']['max_concurrent_requests'])
+    concurrency_manager = ConcurrencyManager(config['concurrency']['max_concurrent_requests'])
+    semaphore = asyncio.Semaphore(concurrency_manager.level)
     batch_size = config.get('dataset', {}).get('batch_size', 1000)
     output_file = f"{config['dataset']['output']}"
 
@@ -234,10 +259,15 @@ async def process_batches(
 
     with tqdm.asyncio.tqdm(total=len(original_data), desc="LLM multi-turn inference", initial=resume_offset) as pbar:
         for i in range(0, len(remaining_data), batch_size):
+            if concurrency_manager.adjustment_needed:
+                logging.info(f"Recreating semaphore with new concurrency: {concurrency_manager.level}")
+                semaphore = asyncio.Semaphore(concurrency_manager.level)
+                concurrency_manager.adjustment_needed = False
+            
             batch_data = remaining_data[i:i + batch_size]
             
             tasks = [
-                asyncio.create_task(process_single_item(item, client, semaphore, config))
+                asyncio.create_task(process_single_item(item, client, semaphore, config, concurrency_manager))
                 for item in batch_data
             ]
             
