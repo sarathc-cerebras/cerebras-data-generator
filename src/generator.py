@@ -24,10 +24,14 @@ class DailyRateLimitError(Exception):
 class ConcurrencyManager:
     """Manages the dynamic concurrency level."""
     def __init__(self, initial_concurrency: int, min_concurrency: int = 1):
+        self._max_concurrency = initial_concurrency
         self._concurrency = initial_concurrency
         self._min_concurrency = min_concurrency
         self._lock = asyncio.Lock()
         self.adjustment_needed = False
+        self._fast_request_counter = 0
+        # Increase concurrency after this many consistently fast requests
+        self._increase_threshold = 50 
 
     @property
     def level(self) -> int:
@@ -39,7 +43,19 @@ class ConcurrencyManager:
             if self._concurrency > self._min_concurrency:
                 self._concurrency -= 1
                 self.adjustment_needed = True
+                self._fast_request_counter = 0 # Reset counter on reduction
                 logging.warning(f"High TTFT detected. Reducing concurrency level to {self._concurrency}.")
+
+    async def record_fast_request(self):
+        """Records a fast request and increases concurrency if threshold is met."""
+        async with self._lock:
+            self._fast_request_counter += 1
+            if self._fast_request_counter >= self._increase_threshold:
+                if self._concurrency < self._max_concurrency:
+                    self._concurrency += 1
+                    self.adjustment_needed = True
+                    logging.info(f"Consistently low TTFT. Increasing concurrency level to {self._concurrency}.")
+                self._fast_request_counter = 0 # Reset counter after check/increase
 
 # Logging Setup
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -77,6 +93,8 @@ async def send_request(
                             logging.info(f"TTFT for request (model: {payload['model']}): {ttft:.2f}s")
                             if ttft > ttft_threshold:
                                 await concurrency_manager.reduce_concurrency()
+                            else:
+                                await concurrency_manager.record_fast_request()
                         if chunk.choices and chunk.choices[0].delta.content:
                             full_response += chunk.choices[0].delta.content
                 else:
@@ -244,7 +262,11 @@ async def process_batches(
 ):
     """Initializes clients and runs the main inference loop over the data batches."""
     client = AsyncCerebras()
-    concurrency_manager = ConcurrencyManager(config['concurrency']['max_concurrent_requests'])
+    concurrency_config = config['concurrency']
+    concurrency_manager = ConcurrencyManager(
+        initial_concurrency=concurrency_config['max_concurrent_requests'],
+        min_concurrency=concurrency_config.get('min_concurrent_requests', 1)
+    )
     semaphore = asyncio.Semaphore(concurrency_manager.level)
     batch_size = config.get('dataset', {}).get('batch_size', 1000)
     output_file = f"{config['dataset']['output']}"
