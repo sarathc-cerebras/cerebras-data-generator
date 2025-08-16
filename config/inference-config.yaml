@@ -1,28 +1,28 @@
 models_to_run:
   - name: "qwen-3-32b"
     concurrency:
-      max_concurrent_requests: 50
+      max_concurrent_requests: 60
       min_concurrent_requests: 20
       recover_threshold: 10 # Number of fast requests before increasing concurrency
   - name: "qwen-3-235b-a22b-instruct-2507"
     concurrency:
-      max_concurrent_requests: 10
-      min_concurrent_requests: 5
+      max_concurrent_requests: 40
+      min_concurrent_requests: 10
       recover_threshold: 10
   - name: "qwen-3-235b-a22b-thinking-2507" 
     concurrency:
-      max_concurrent_requests: 6
-      min_concurrent_requests: 3
+      max_concurrent_requests: 12
+      min_concurrent_requests: 6
       recover_threshold: 10
   - name: "qwen-3-coder-480b"
     concurrency:
-      max_concurrent_requests: 30
-      min_concurrent_requests: 12
+      max_concurrent_requests: 20
+      min_concurrent_requests: 5
       recover_threshold: 10
   - name: "gpt-oss-120b" 
     concurrency:
-      max_concurrent_requests: 30
-      min_concurrent_requests: 12
+      max_concurrent_requests: 135
+      min_concurrent_requests: 30
       recover_threshold: 10
 
 # Global settings used as fallbacks or for shared logic
