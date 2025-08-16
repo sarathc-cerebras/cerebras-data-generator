@@ -8,6 +8,7 @@ import random
 from datasets import load_dataset
 import tqdm.asyncio
 from typing import Dict, Any, List, Optional
+from itertools import cycle
 
 from httpx import ConnectError, ReadTimeout
 from cerebras.cloud.sdk import (
@@ -98,20 +99,24 @@ async def send_request(
                         if chunk.choices and chunk.choices[0].delta.content:
                             full_response += chunk.choices[0].delta.content
                 else:
+                    # For non-streaming, we can't measure TTFT, but we can record success
+                    await concurrency_manager.record_fast_request()
                     if response.choices and response.choices[0].message.content:
                         full_response = response.choices[0].message.content
 
                 end_time = time.time()
-                logging.info(f"Request successful for model {payload['model']}. Concurrency: {concurrency_manager.level()} Total time: {end_time - start_time:.2f}s")
+                logging.info(f"Request successful for model {payload['model']}. Concurrency: {concurrency_manager.level}. Total time: {end_time - start_time:.2f}s")
                 return {"success": True, "model": payload['model'], "response": full_response, "ttft": ttft}
 
             except (ConnectError, ReadTimeout) as e:
                 logging.warning(f"Request failed (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {retry_delay:.2f}s...")
+                await concurrency_manager.reduce_concurrency() # Treat timeouts as a signal to slow down
                 await asyncio.sleep(retry_delay)
                 retry_delay = min(retry_delay * 2, max_retry_delay)
 
             except APIStatusError as e:
                 if e.status_code == 429:
+                    await concurrency_manager.reduce_concurrency() # Rate limited, slow down
                     remaining_requests_header = e.response.headers.get("x-ratelimit-remaining-requests-day")
                     try:
                         if remaining_requests_header is not None and float(remaining_requests_header) <= 0:
@@ -132,12 +137,12 @@ async def send_request(
                     if wait_time > 0:
                         await asyncio.sleep(wait_time)
                     else:
-                        # Fallback to exponential backoff if header is missing/invalid
                         logging.warning(f"Rate limit hit. No reset header found. Retrying in {retry_delay:.2f}s...")
                         await asyncio.sleep(retry_delay)
                         retry_delay = min(retry_delay * 2, max_retry_delay)
                 
                 elif e.status_code == 503:
+                    await concurrency_manager.reduce_concurrency() # Service unavailable, slow down
                     logging.warning(f"Service unavailable (503) (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {retry_delay:.2f}s...")
                     await asyncio.sleep(retry_delay + random.uniform(0, 1)) # Add jitter
                     retry_delay = min(retry_delay * 2, max_retry_delay)
@@ -153,14 +158,11 @@ async def send_request(
 
 # --- Data and Environment Setup Functions ---
 def get_dataset(config: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """
-    Loads and configures the dataset based on the provided configuration.
-    Returns the list of dataset items to be processed.
-    """
+    """Loads and configures the dataset, returning a list of items."""
     dataset_config = config["dataset"]
     if dataset_config["repo_type"] == "hf":
         hf_config = dataset_config["hf"]
-        dataset = load_dataset(hf_config["repo"], hf_config.get("subset"), split=hf_config["split"], num_proc=hf_config["num_proc"])
+        dataset = load_dataset(hf_config["repo"], hf_config.get("subset"), split=hf_config["split"], num_proc=hf_config.get("num_proc"))
     else:
         local_config = dataset_config["local"]
         dataset = load_dataset(local_config["format"], data_files=local_config["data_files"], split=local_config["split"])
@@ -202,12 +204,10 @@ async def process_single_item(
     client: AsyncCerebras,
     semaphore: asyncio.Semaphore,
     config: Dict[str, Any],
-    concurrency_manager: ConcurrencyManager
+    concurrency_manager: ConcurrencyManager,
+    model_name: str
 ) -> Dict[str, Any]:
-    """
-    Processes a single multi-turn conversation item.
-    It iterates through human prompts, generates responses, and builds the conversation history.
-    """
+    """Processes a single multi-turn conversation item for a specific model."""
     if "conversations" not in item or not isinstance(item["conversations"], list):
         logging.warning(f"Skipping item due to missing or invalid 'conversations' field: {item}")
         return {"success": False, "error": "Invalid item format"}
@@ -218,8 +218,6 @@ async def process_single_item(
         return {"success": False, "error": "No human prompts found"}
 
     generation_params = config.get('generation', {})
-    model = config['models_to_run'][0] # Assuming one model for multi-turn for simplicity
-    
     conversation_history = []
     final_generated_conversation = []
 
@@ -227,7 +225,7 @@ async def process_single_item(
         conversation_history.append({"role": "user", "content": prompt})
         final_generated_conversation.append({"from": "human", "value": prompt})
 
-        payload = {"model": model, "messages": conversation_history, **generation_params}
+        payload = {"model": model_name, "messages": conversation_history, **generation_params}
         
         result = await send_request(client, payload, semaphore, config, concurrency_manager)
 
@@ -249,10 +247,9 @@ async def process_single_item(
             "langdetect": item.get("langdetect", "unknown"),
             "source": item.get("source", "unknown"),
             "reward": item.get("reward", 0),
-            "model": model
+            "model": model_name
         }
     }
-
 
 # --- Main Processing Loop ---
 async def process_batches(
@@ -262,37 +259,55 @@ async def process_batches(
 ):
     """Initializes clients and runs the main inference loop over the data batches."""
     client = AsyncCerebras()
-    concurrency_config = config['concurrency']
-    concurrency_manager = ConcurrencyManager(
-        initial_concurrency=concurrency_config['max_concurrent_requests'],
-        min_concurrency=concurrency_config['min_concurrent_requests'],
-        recover_threshold=concurrency_config['recover_threshold']
-    )
-    semaphore = asyncio.Semaphore(concurrency_manager.level)
     batch_size = config.get('dataset', {}).get('batch_size', 1000)
     output_file = f"{config['dataset']['output']}"
+    
+    # --- Model and Concurrency Setup ---
+    models_config = config.get('models_to_run', [])
+    if not models_config or not isinstance(models_config[0], dict):
+        logging.error("`models_to_run` must be a list of objects, each with a 'name' and 'concurrency'. Check config.")
+        return
 
-    if len(config.get('models_to_run', [])) > 1:
-        logging.warning("Multi-turn conversation logic currently supports one model at a time. Using the first model specified.")
+    model_resources = {}
+    for model_conf in models_config:
+        model_name = model_conf['name']
+        # Merge model-specific concurrency with global settings as fallbacks
+        concurrency_settings = {**config.get('concurrency', {}), **model_conf.get('concurrency', {})}
+        
+        manager = ConcurrencyManager(
+            initial_concurrency=concurrency_settings['max_concurrent_requests'],
+            min_concurrency=concurrency_settings['min_concurrent_requests'],
+            recover_threshold=concurrency_settings['recover_threshold']
+        )
+        semaphore = asyncio.Semaphore(manager.level)
+        model_resources[model_name] = {"manager": manager, "semaphore": semaphore}
+        logging.info(f"Initialized model '{model_name}' with max_concurrency: {manager.level}")
 
     total_successful = resume_offset
     total_failed = 0
     
     remaining_data = original_data[resume_offset:]
+    model_cycler = cycle(model_resources.items())
 
     with tqdm.asyncio.tqdm(total=len(original_data), desc="LLM multi-turn inference", initial=resume_offset) as pbar:
         for i in range(0, len(remaining_data), batch_size):
-            if concurrency_manager.adjustment_needed:
-                logging.info(f"Recreating semaphore with new concurrency: {concurrency_manager.level}")
-                semaphore = asyncio.Semaphore(concurrency_manager.level)
-                concurrency_manager.adjustment_needed = False
+            # Before each batch, check if any semaphores need to be recreated
+            for model_name, resources in model_resources.items():
+                manager = resources["manager"]
+                if manager.adjustment_needed:
+                    logging.info(f"Recreating semaphore for model '{model_name}' with new concurrency: {manager.level}")
+                    resources["semaphore"] = asyncio.Semaphore(manager.level)
+                    manager.adjustment_needed = False
             
             batch_data = remaining_data[i:i + batch_size]
             
-            tasks = [
-                asyncio.create_task(process_single_item(item, client, semaphore, config, concurrency_manager))
-                for item in batch_data
-            ]
+            tasks = []
+            for item in batch_data:
+                model_name, resources = next(model_cycler)
+                task = asyncio.create_task(process_single_item(
+                    item, client, resources["semaphore"], config, resources["manager"], model_name
+                ))
+                tasks.append(task)
             
             try:
                 batch_results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -315,8 +330,8 @@ async def process_batches(
 
                 if successful_generations:
                     with open(output_file, "a") as f:
-                        for item in successful_generations:
-                            f.write(json.dumps(item) + "\n")
+                        for result_item in successful_generations:
+                            f.write(json.dumps(result_item) + "\n")
                 pbar.update(len(batch_data))
 
             except DailyRateLimitError as e:
@@ -350,6 +365,7 @@ async def main():
     logging.info(f"Loaded {len(original_data)} total items from the dataset.")
 
     output_file = f"{config['dataset']['output']}"
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
     
     resume_offset = get_resume_offset(output_file)
     
