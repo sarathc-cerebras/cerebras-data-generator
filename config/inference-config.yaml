@@ -1,13 +1,21 @@
 
 models_to_run:
-  - "qwen-3-235b-a22b-instruct-2507"
+  #- "qwen-3-235b-a22b-instruct-2507"
+  - "qwen-3-32b"
 
 # Concurrency and Rate Limiting
 concurrency:
-  max_concurrent_requests: 10
+  max_concurrent_requests: 50
+  min_concurrent_requests: 20
+  recover_threshold: 10 # Number of fast requests before increasing concurrency
   initial_retry_delay: 1.0
   max_retry_delay: 60.0
   max_retries: 5
+
+# Rate limits based on model capacity
+# rate_limit:
+#   requests_per_minute: 400
+#   tokens_per_minute: 2000000
 
 # Load Monitoring
 load_monitoring:
@@ -17,7 +25,7 @@ load_monitoring:
 
 generation:
   stream: false
-  max_completion_tokens: 20000
+  max_completion_tokens: 8196 #20000
   temperature: 0.7
   top_p: 0.8
   seed: 1
@@ -38,6 +46,6 @@ dataset:
     format: "parquet"
     data_files: "../data/input/gsm8k_test.parquet"
     split: "test"
-  # take: 1000
+  # take: 3
   # rename_columns:
   #   - ["conversations", "prompt"]

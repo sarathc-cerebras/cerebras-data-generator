@@ -23,7 +23,7 @@ class DailyRateLimitError(Exception):
 # --- Concurrency Manager ---
 class ConcurrencyManager:
     """Manages the dynamic concurrency level."""
-    def __init__(self, initial_concurrency: int, min_concurrency: int = 1):
+    def __init__(self, initial_concurrency: int, min_concurrency: int = 20, recover_threshold: int = 10):
         self._max_concurrency = initial_concurrency
         self._concurrency = initial_concurrency
         self._min_concurrency = min_concurrency
@@ -31,7 +31,7 @@ class ConcurrencyManager:
         self.adjustment_needed = False
         self._fast_request_counter = 0
         # Increase concurrency after this many consistently fast requests
-        self._increase_threshold = 50 
+        self._increase_threshold = recover_threshold 
 
     @property
     def level(self) -> int:
@@ -102,7 +102,7 @@ async def send_request(
                         full_response = response.choices[0].message.content
 
                 end_time = time.time()
-                logging.info(f"Request successful for model {payload['model']}. Total time: {end_time - start_time:.2f}s")
+                logging.info(f"Request successful for model {payload['model']}. Concurrency: {concurrency_manager.level()} Total time: {end_time - start_time:.2f}s")
                 return {"success": True, "model": payload['model'], "response": full_response, "ttft": ttft}
 
             except (ConnectError, ReadTimeout) as e:
@@ -265,7 +265,8 @@ async def process_batches(
     concurrency_config = config['concurrency']
     concurrency_manager = ConcurrencyManager(
         initial_concurrency=concurrency_config['max_concurrent_requests'],
-        min_concurrency=concurrency_config.get('min_concurrent_requests', 1)
+        min_concurrency=concurrency_config['min_concurrent_requests'],
+        recover_threshold=concurrency_config['recover_threshold']
     )
     semaphore = asyncio.Semaphore(concurrency_manager.level)
     batch_size = config.get('dataset', {}).get('batch_size', 1000)
