@@ -345,28 +345,39 @@ async def main():
         return
 
     config = load_configuration("config/inference-config.yaml")
-    if not config: return
+    if not config:
+        return
 
     initialize_shared_resources(config)
 
-    # Ensure the output directory exists
-    output_file = f"{config['dataset']['output']}"
-    os.makedirs(os.path.dirname(output_file), exist_ok=True)
+    # Ensure the output directory exists, only if a directory path is specified
+    output_file = config['dataset']['output']
+    output_dir = os.path.dirname(output_file)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
 
-    # Get IDs of items that are already processed.
+    # Get IDs of items that are already processed to support resuming.
     processed_ids = get_processed_ids(output_file)
 
     original_data = get_dataset(config)
-    if not original_data: return
+    if not original_data:
+        logging.error("No data could be loaded from the dataset. Halting.")
+        return
     
     # Filter out items that have already been processed.
     # This assumes each item in your dataset has a unique "id" field.
-    logging.info("Filtering out already processed items...")
-    remaining_data = [item for item in original_data if item.get("id") not in processed_ids]
+    if processed_ids:
+        logging.info(f"Found {len(processed_ids)} already processed items. Filtering them out.")
+        remaining_data = [item for item in original_data if item.get("id") not in processed_ids]
+    else:
+        remaining_data = original_data
         
     logging.info(f"Loaded {len(original_data)} total items from the dataset. {len(remaining_data)} items remain to be processed.")
 
-    await process_continuously(remaining_data, config)
+    if remaining_data:
+        await process_continuously(remaining_data, config)
+    else:
+        logging.info("No items remain to be processed. Exiting.")
 
 if __name__ == "__main__":
     # This block only runs when you execute `python src/generator.py`

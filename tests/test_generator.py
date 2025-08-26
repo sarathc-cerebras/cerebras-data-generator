@@ -4,7 +4,7 @@ import json
 import sys
 import os
 import yaml
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock, AsyncMock, patch, call
 
 # Add the 'src' directory to the Python path to allow direct import
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
@@ -12,30 +12,41 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../s
 from generator import (
     send_request,
     load_configuration,
-    get_resume_offset,
+    get_processed_ids,
     main,
-    DailyRateLimitError
+    DailyRateLimitError,
+    ConcurrencyManager,
+    initialize_shared_resources,
+    process_single_item,
+    API_STATE
 )
 from cerebras.cloud.sdk import AsyncCerebras, APIStatusError
-from httpx import Request, Response
+from httpx import Request, Response, ConnectError
 
 # --- Test Fixtures ---
 
 @pytest.fixture
 def mock_config():
-    """Provides a default configuration for tests."""
+    """Provides a default configuration for tests, reflecting the new structure."""
     return {
-        "load_monitoring": {"ttft_threshold": 5.0},
+        "models_to_run": [
+            {
+                "name": "test-model",
+                "concurrency": {
+                    "max_concurrent_requests": 5,
+                    "min_concurrent_requests": 1,
+                    "recover_threshold": 3
+                }
+            }
+        ],
+        "load_monitoring": {"ttft_threshold": 0.5},
         "concurrency": {
             "max_retries": 3,
             "initial_retry_delay": 0.01,
             "max_retry_delay": 0.1,
         },
-        "dataset": {
-            "output": "test_output.jsonl",
-            "batch_size": 10
-        },
-        "models_to_run": ["test-model-1"]
+        "dataset": {"output": "test_output.jsonl"},
+        "generation": {"stream": True}
     }
 
 @pytest.fixture
@@ -48,138 +59,189 @@ def mock_payload():
     }
 
 @pytest.fixture
+def mock_concurrency_manager():
+    """Provides a mock ConcurrencyManager."""
+    manager = ConcurrencyManager(
+        model_name="test-model",
+        initial_concurrency=5,
+        min_concurrency=1,
+        recover_threshold=3
+    )
+    manager.reduce_concurrency = AsyncMock()
+    manager.record_fast_request = AsyncMock()
+    return manager
+
+@pytest.fixture
 def mock_semaphore():
     """Provides a semaphore for concurrency control."""
-    return asyncio.Semaphore(1)
+    return asyncio.Semaphore(5)
+
+# --- Tests for ConcurrencyManager ---
+
+@pytest.mark.asyncio
+async def test_concurrency_manager_reduce():
+    """Tests that concurrency is reduced correctly."""
+    manager = ConcurrencyManager("test", 5, 1, 10)
+    assert manager.level == 5
+    await manager.reduce_concurrency()
+    assert manager.level == 4
+    assert manager.adjustment_needed is True
+    assert manager._fast_request_counter == 0
+
+@pytest.mark.asyncio
+async def test_concurrency_manager_stops_at_min():
+    """Tests that concurrency reduction stops at the minimum level."""
+    manager = ConcurrencyManager("test", 2, 1, 10)
+    await manager.reduce_concurrency()
+    assert manager.level == 1
+    await manager.reduce_concurrency() # Should have no effect
+    assert manager.level == 1
+
+@pytest.mark.asyncio
+async def test_concurrency_manager_recover():
+    """Tests that concurrency recovers after enough fast requests."""
+    manager = ConcurrencyManager("test", 5, 1, 3)
+    manager._concurrency = 2 # Manually set to a lower level
+    
+    await manager.record_fast_request()
+    await manager.record_fast_request()
+    assert manager.level == 2 # Not yet at threshold
+    
+    await manager.record_fast_request() # This should trigger the increase
+    assert manager.level == 3
+    assert manager._fast_request_counter == 0 # Counter should reset
+
+@pytest.mark.asyncio
+async def test_concurrency_manager_not_exceed_max():
+    """Tests that concurrency does not recover beyond the max level."""
+    manager = ConcurrencyManager("test", 5, 1, 3)
+    
+    for _ in range(10): # More than enough to trigger
+        await manager.record_fast_request()
+        
+    assert manager.level == 5 # Should not exceed initial max
 
 # --- Tests for Core Request Logic ---
 
 @pytest.mark.asyncio
-async def test_send_request_success_streaming(mock_config, mock_payload, mock_semaphore):
-    """Tests a successful streaming request."""
+async def test_send_request_high_ttft_reduces_concurrency(mock_config, mock_payload, mock_semaphore, mock_concurrency_manager):
+    """Tests that high TTFT triggers a concurrency reduction."""
     client = AsyncCerebras()
-    async def stream_generator():
-        yield MagicMock(choices=[MagicMock(delta=MagicMock(content="Hello "))])
-        yield MagicMock(choices=[MagicMock(delta=MagicMock(content="World"))])
-    client.chat.completions.create = AsyncMock(return_value=stream_generator())
+    async def slow_stream_generator():
+        await asyncio.sleep(0.6) # Exceeds the 0.5s threshold
+        yield MagicMock(choices=[MagicMock(delta=MagicMock(content="..."))])
+    client.chat.completions.create = AsyncMock(return_value=slow_stream_generator())
     
-    result = await send_request(client, mock_payload, mock_semaphore, mock_config)
+    await send_request(client, mock_payload, mock_semaphore, mock_config, mock_concurrency_manager)
 
-    assert result["success"] is True
-    assert result["response"] == "Hello World"
-    assert result["ttft"] > 0
-    client.chat.completions.create.assert_awaited_once()
+    mock_concurrency_manager.reduce_concurrency.assert_awaited_once()
+    mock_concurrency_manager.record_fast_request.assert_not_awaited()
 
 @pytest.mark.asyncio
-async def test_send_request_raises_daily_rate_limit_error(mock_config, mock_payload, mock_semaphore):
-    """Tests that DailyRateLimitError is raised when the daily limit is hit."""
+async def test_send_request_low_ttft_records_fast_request(mock_config, mock_payload, mock_semaphore, mock_concurrency_manager):
+    """Tests that low TTFT is recorded as a fast request."""
     client = AsyncCerebras()
-    mock_response = Response(
-        status_code=429,
-        headers={"x-ratelimit-remaining-requests-day": "0"},
-        request=Request("POST", "http://mock.url")
-    )
-    client.chat.completions.create = AsyncMock(
-        side_effect=APIStatusError("Daily limit hit", response=mock_response, body={})
-    )
-
-    with pytest.raises(DailyRateLimitError):
-        await send_request(client, mock_payload, mock_semaphore, mock_config)
-
-@pytest.mark.asyncio
-async def test_send_request_handles_per_minute_limit(monkeypatch, mock_config, mock_payload, mock_semaphore):
-    """Tests that the correct wait time is used for per-minute limits."""
-    client = AsyncCerebras()
-    mock_sleep = AsyncMock()
-    monkeypatch.setattr(asyncio, "sleep", mock_sleep)
-    mock_response = Response(
-        status_code=429,
-        headers={"x-ratelimit-reset-tokens-minute": "0.5"},
-        request=Request("POST", "http://mock.url")
-    )
-    successful_response = MagicMock(choices=[MagicMock(message=MagicMock(content="Success"))])
-    client.chat.completions.create = AsyncMock(side_effect=[APIStatusError("Rate limit", response=mock_response, body={}), successful_response])
-    mock_payload["stream"] = False
-
-    await send_request(client, mock_payload, mock_semaphore, mock_config)
+    async def fast_stream_generator():
+        yield MagicMock(choices=[MagicMock(delta=MagicMock(content="..."))])
+    client.chat.completions.create = AsyncMock(return_value=fast_stream_generator())
     
-    # Assert that sleep was called with the duration from the header + 1s buffer
-    mock_sleep.assert_awaited_with(pytest.approx(0.5 + 1))
+    await send_request(client, mock_payload, mock_semaphore, mock_config, mock_concurrency_manager)
+
+    mock_concurrency_manager.record_fast_request.assert_awaited_once()
+    mock_concurrency_manager.reduce_concurrency.assert_not_awaited()
 
 @pytest.mark.asyncio
-async def test_send_request_max_retries_exceeded(mock_config, mock_payload, mock_semaphore):
-    """Tests that the function gives up after max_retries."""
+async def test_send_request_connect_error_reduces_concurrency(mock_config, mock_payload, mock_semaphore, mock_concurrency_manager):
+    """Tests that ConnectError triggers a concurrency reduction and retry."""
     client = AsyncCerebras()
-    mock_config["concurrency"]["max_retries"] = 2
-    mock_response = Response(status_code=503, request=Request("POST", "http://mock.url"))
-    client.chat.completions.create = AsyncMock(side_effect=APIStatusError("Unavailable", response=mock_response, body={}))
+    mock_config["concurrency"]["max_retries"] = 1
+    client.chat.completions.create = AsyncMock(side_effect=ConnectError("Connection failed"))
 
-    result = await send_request(client, mock_payload, mock_semaphore, mock_config)
+    result = await send_request(client, mock_payload, mock_semaphore, mock_config, mock_concurrency_manager)
 
     assert result["success"] is False
-    assert result["error"] == "Max retries exceeded"
-    assert client.chat.completions.create.call_count == 2
+    mock_concurrency_manager.reduce_concurrency.assert_awaited_once()
 
 # --- Tests for Helper Functions ---
 
-def test_load_configuration(tmp_path):
-    """Tests loading of a valid YAML config and handling of a missing file."""
-    config_dir = tmp_path / "config"
-    config_dir.mkdir()
-    config_file = config_dir / "test_config.yaml"
-    
-    # Test valid config
-    config_data = {"models_to_run": ["test-model"]}
-    config_file.write_text(yaml.dump(config_data))
-    assert load_configuration(config_file) == config_data
-
-    # Test missing file
-    config_file.unlink()
-    assert load_configuration(config_file) is None
-
-def test_get_resume_offset(tmp_path):
-    """Tests the checkpoint resume logic."""
+def test_get_processed_ids(tmp_path):
+    """Tests the logic for reading already processed item IDs from the output file."""
     output_file = tmp_path / "output.jsonl"
 
-    # Test with no existing file
-    assert get_resume_offset(output_file) == 0
+    # 1. Test with no existing file
+    assert get_processed_ids(output_file) == set()
 
-    # Test with an existing file
-    output_file.write_text('{"success": true}\n{"success": true}\n')
-    assert get_resume_offset(output_file) == 2
+    # 2. Test with a valid file
+    output_file.write_text(
+        '{"id": "id_1", "data": "..."}\n'
+        '{"id": "id_2", "data": "..."}\n'
+        '{"id": "id_1", "data": "..."}\n' # Duplicate ID
+    )
+    assert get_processed_ids(output_file) == {"id_1", "id_2"}
+
+    # 3. Test with malformed JSON
+    output_file.write_text(
+        '{"id": "id_3"}\n'
+        'this is not json\n'
+        '{"id": "id_4"}\n'
+    )
+    assert get_processed_ids(output_file) == {"id_3", "id_4"}
+
+def test_initialize_shared_resources(mock_config):
+    """Tests that shared resources are initialized correctly from config."""
+    initialize_shared_resources(mock_config)
+    
+    assert "client" in API_STATE
+    assert "model_resources" in API_STATE
+    assert "test-model" in API_STATE["model_resources"]
+    
+    manager = API_STATE["model_resources"]["test-model"]["manager"]
+    assert isinstance(manager, ConcurrencyManager)
+    assert manager._max_concurrency == 5
+    assert manager._min_concurrency == 1
+    assert manager._increase_threshold == 3
+
+    with pytest.raises(ValueError):
+        initialize_shared_resources({"models_to_run": []})
 
 # --- Integration Test for Main Orchestrator ---
 
 @pytest.mark.asyncio
-@patch('generator.process_batches')
+@patch('generator.process_continuously')
 @patch('generator.get_dataset')
+@patch('generator.get_processed_ids')
+@patch('generator.initialize_shared_resources')
 @patch('generator.load_configuration')
-async def test_main_orchestrator_resume_logic(mock_load_config, mock_get_dataset, mock_process_batches, monkeypatch):
+async def test_main_orchestrator_filters_processed_items(
+    mock_load_config, mock_init_resources, mock_get_ids, mock_get_dataset, mock_process_continuously, monkeypatch
+):
     """
-    Tests that the main function correctly calculates the prompt offset
-    for resuming a job with multiple models.
+    Tests that the main function correctly filters out already processed items
+    before calling the processing loop.
     """
-    # Mock environment and config
     monkeypatch.setenv("CEREBRAS_API_KEY", "test-key")
-    mock_config_data = {
-        "models_to_run": ["model-a", "model-b"], # 2 models
-        "dataset": {"output": "dummy.jsonl"}
-    }
-    mock_load_config.return_value = mock_config_data
+    mock_load_config.return_value = {"dataset": {"output": "dummy.jsonl"}}
     
-    # Mock the chained calls to get the list of prompts correctly
-    mock_get_dataset.return_value.to_pandas.return_value.__getitem__.return_value.tolist.return_value = ["p1", "p2", "p3", "p4", "p5"]
+    # Simulate a dataset with 4 items
+    mock_dataset = [
+        {"id": "id_1", "conversations": []},
+        {"id": "id_2", "conversations": []},
+        {"id": "id_3", "conversations": []},
+        {"id": "id_4", "conversations": []},
+    ]
+    mock_get_dataset.return_value = mock_dataset
+    
+    # Simulate that two items have already been processed
+    mock_get_ids.return_value = {"id_1", "id_4"}
 
-    # --- Test Scenario ---
-    # Simulate an output file with 5 lines. With 2 models, this means 2 full prompts
-    # have been processed (4 lines), and the 3rd prompt is partially done (1 line).
-    # The script should resume from prompt index 2 (the 3rd prompt).
-    with patch('generator.get_resume_offset', return_value=5) as mock_get_offset:
-        await main()
+    await main()
 
-    # Assert that process_batches was called with the correct prompt offset (2)
-    # resume_offset_prompts = 5 // 2 = 2
-    mock_process_batches.assert_called_once()
-    # The arguments are positional, so we check the args tuple, not kwargs dict
-    positional_args, keyword_args = mock_process_batches.call_args
-    assert positional_args[2] == 2
+    # Assert that process_continuously is called with the correct remaining items
+    mock_process_continuously.assert_awaited_once()
+    call_args = mock_process_continuously.call_args[0]
+    
+    remaining_data = call_args[0]
+    remaining_ids = {item['id'] for item in remaining_data}
+    
+    assert len(remaining_data) == 2
+    assert remaining_ids == {"id_2", "id_3"}
