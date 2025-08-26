@@ -2,3 +2,5 @@ cerebras-cloud-sdk
 pyyaml
 datasets
 httpx
+aiosqlite
+fastapi[all]

@@ -1,8 +1,8 @@
 models_to_run:
   - name: "qwen-3-32b"
     concurrency:
-      max_concurrent_requests: 60
-      min_concurrent_requests: 20
+      max_concurrent_requests: 30
+      min_concurrent_requests: 10
       recover_threshold: 10 # Number of fast requests before increasing concurrency
   - name: "qwen-3-235b-a22b-instruct-2507"
     concurrency:
@@ -36,6 +36,16 @@ load_monitoring:
   ttft_threshold: 5.0
   request_timeout: 120.0
 
+# API Server Settings
+api_server:
+  host: "0.0.0.0"
+  port: 8000
+  result_timeout_seconds: 300
+
+# --- SQLite for Persistent Queue ---
+database:
+  path: "data/queue.db" # Path to the SQLite database file
+  
 generation:
   stream: true
   max_completion_tokens: 8196
@@ -47,13 +57,13 @@ generation:
 dataset:
   repo_type: hf
   output: "data/output/baai_infinity_instruct_core_generated.jsonl"
-  batch_size: 100 # Number of prompts to process before saving results
-  n_samples: 1
+  #n_samples: 1
   hf:
     repo: "BAAI/Infinity-Instruct"
-    subset: "7M_core"
+    subset: "7M"
     split: "train"
     num_proc: 90
+    streaming: false
   local:
     format: "parquet"
     data_files: "../data/input/gsm8k_test.parquet"
