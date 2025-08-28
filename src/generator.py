@@ -63,11 +63,11 @@ class ConcurrencyManager:
                 if self._concurrency < self._max_concurrency:
                     self._concurrency += 1
                     self.adjustment_needed = True
-                    logging.info(f"Low TTFT for '{self._model_name}'. Increasing concurrency to {self._concurrency}.")
+                    logging.warning(f"Low TTFT for '{self._model_name}'. Increasing concurrency to {self._concurrency}.")
                 self._fast_request_counter = 0
 
 # Logging Setup
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.WARNING, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- Core Request Logic ---
 async def send_request(
@@ -246,7 +246,12 @@ def initialize_shared_resources(config: Dict[str, Any]):
             recover_threshold=concurrency_settings['recover_threshold']
         )
         semaphore = asyncio.Semaphore(manager._max_concurrency)
-        model_resources[model_name] = {"manager": manager, "semaphore": semaphore}
+        # Store the full model config along with the manager and semaphore
+        model_resources[model_name] = {
+            "manager": manager,
+            "semaphore": semaphore,
+            "config": model_conf
+        }
         logging.info(f"Initialized model '{model_name}' with max_concurrency: {manager._max_concurrency}")
 
     API_STATE["model_resources"] = model_resources
@@ -256,31 +261,35 @@ async def process_single_item(
     item: Dict[str, Any],
     client: AsyncCerebras,
     semaphore: asyncio.Semaphore,
-    config: Dict[str, Any],
+    global_config: Dict[str, Any],
     concurrency_manager: ConcurrencyManager,
-    model_name: str
+    model_name: str,
+    model_config: Dict[str, Any]
 ) -> Dict[str, Any]:
     """Processes a single multi-turn conversation item for a specific model."""
     if "conversations" not in item or not isinstance(item["conversations"], list):
         logging.warning(f"Skipping item due to missing or invalid 'conversations' field: {item}")
         return {"success": False, "error": "Invalid item format"}
 
+    # Start with global generation settings and override with model-specific ones
+    generation_params = global_config.get('generation', {}).copy()
+    model_generation_config = model_config.get('generation', {})
+    generation_params.update(model_generation_config)
+
+    conversation_history = []
+    final_generated_conversation = []
+
     human_prompts = [turn["value"] for turn in item["conversations"] if turn.get("from") == "human"]
     if not human_prompts:
         logging.warning(f"Skipping item as no 'human' turn was found: {item}")
         return {"success": False, "error": "No human prompts found"}
-
-    generation_params = config.get('generation', {})
-    conversation_history = []
-    final_generated_conversation = []
 
     for prompt in human_prompts:
         conversation_history.append({"role": "user", "content": prompt})
         final_generated_conversation.append({"from": "human", "value": prompt})
 
         payload = {"model": model_name, "messages": conversation_history, **generation_params}
-        
-        result = await send_request(client, payload, semaphore, config, concurrency_manager)
+        result = await send_request(client, payload, semaphore, global_config, concurrency_manager)
 
         if result and result.get("success"):
             gpt_response = result["response"]
@@ -322,7 +331,7 @@ async def process_continuously(
 
     tasks = [
         asyncio.create_task(process_single_item(
-            item, client, resources["semaphore"], config, resources["manager"], model_name
+            item, client, resources["semaphore"], config, resources["manager"], model_name, resources["config"]
         ))
         for item, (model_name, resources) in zip(data_to_process, model_cycler)
     ]

@@ -1,15 +1,40 @@
 # Cerebras Synthetic Data Generator
 
-This project provides a high-performance, asynchronous client for generating synthetic data using the Cerebras Cloud Inference API. It is designed for high-throughput, offline workloads, with built-in mechanisms for load monitoring and respecting service rate limits.
+This project provides a high-performance, asynchronous proxy system for generating synthetic data using the Cerebras Cloud Inference API. It features a FastAPI-based queue system that acts as a proxy to the actual Cerebras endpoint, with dedicated workers handling the processing at maximum capacity.
 
-## Features
+## Architecture Overview
 
--   **Asynchronous by Design**: Uses `asyncio` and the `cerebras-cloud-sdk` for high-concurrency batch inferencing.
--   **Dynamic Load Monitoring**: Tracks Time to First Token (TTFT) to infer server load and adjusts behavior accordingly.
--   **Robust Error Handling**: Implements an exponential backoff strategy for retrying requests on transient errors (e.g., `503 Service Unavailable`).
--   **Configuration Driven**: All parameters, including models, concurrency, and dataset sources, are managed via a `YAML` config file.
--   **Flexible Data Sourcing**: Loads prompts from local files or directly from Hugging Face datasets.
--   **Progress Tracking**: Displays a real-time progress bar using `tqdm`.
+![System Architecture](assets/design.png)
+
+The system consists of three main components:
+
+### 1. **API Server** (`api_server.py`)
+- FastAPI-based web server that accepts generation requests
+- Queues requests in a SQLite database
+- Returns request IDs immediately for asynchronous processing
+- Provides endpoints to check request status and retrieve results
+
+### 2. **Worker System** (`worker.py`)
+- **Dispatcher**: Single task that claims pending jobs from the database
+- **Processors**: Multiple concurrent tasks that handle the actual API calls to Cerebras
+- Uses an in-memory queue to eliminate database write contention
+- Supports high concurrency (200+ workers) without performance degradation
+
+### 3. **Client** (`api_client.py`)
+- Batch processing client that submits datasets to the API server
+- Polls for results and handles retries/timeouts
+- Supports concurrent request submission and result polling
+
+## Key Features
+
+-   **High-Performance Proxy**: Acts as a queue-based proxy to Cerebras API with configurable concurrency per model
+-   **Asynchronous Processing**: Uses `asyncio` and producer-consumer pattern for maximum throughput
+-   **Dynamic Load Monitoring**: Tracks Time to First Token (TTFT) to infer server load and adjusts behavior accordingly
+-   **Database Queue**: SQLite-based persistent queue with WAL mode for high concurrency
+-   **Robust Error Handling**: Comprehensive retry logic with exponential backoff
+-   **Configuration Driven**: All parameters managed via YAML configuration
+-   **Flexible Data Sources**: Supports local files and Hugging Face datasets
+-   **Progress Tracking**: Real-time progress monitoring and statistics
 
 ## Installation
 
@@ -32,83 +57,245 @@ This project provides a high-performance, asynchronous client for generating syn
 
 ## Configuration
 
-All script behavior is controlled by `config/inference-config.yaml`. Below is a detailed explanation of the available options.
+All system behavior is controlled by `config/inference-config.yaml`. Below is the complete configuration structure:
 
 ```yaml
-# A list of Cerebras models to run inference against.
+# Models to run inference against
 models_to_run:
-  - "qwen-3-235b-a22b-instruct-2507"
+  - name: "qwen-3-32b"
+    concurrency:
+      max_concurrent_requests: 10
+      min_concurrent_requests: 1
+      recover_threshold: 5
+    generation:
+      temperature: 0.7
+      max_completion_tokens: 2000
 
-# Concurrency and Rate Limiting settings
+# Worker system configuration
+worker:
+  concurrency: 200  # Total number of concurrent workers
+
+# Global concurrency and retry settings
 concurrency:
-  max_concurrent_requests: 10  # Max number of parallel requests
-  initial_retry_delay: 1.0     # Initial delay (in seconds) before a retry
-  max_retry_delay: 60.0        # Maximum delay for exponential backoff
-  max_retries: 5               # Max number of retries for a failed request
+  max_concurrent_requests: 10
+  min_concurrent_requests: 1
+  recover_threshold: 5
+  initial_retry_delay: 1.0
+  max_retry_delay: 60.0
+  max_retries: 5
 
-# Client-side load monitoring
+# Load monitoring thresholds
 load_monitoring:
-  ttft_threshold: 5.0          # Warn if Time to First Token exceeds this (seconds)
-  request_timeout: 120.0       # Timeout for a single API request
+  ttft_threshold: 5.0
+  request_timeout: 120.0
 
-# Parameters passed directly to the Cerebras chat completion API
+# API generation parameters
 generation:
-  stream: true                 # Set to true for TTFT monitoring
-  max_completion_tokens: 20000 # Max tokens in the generated response
-  temperature: 0.7             # Sampling temperature
-  top_p: 0.8                   # Nucleus sampling probability
-  seed: 1                      # Random seed for reproducibility
+  stream: true
+  max_completion_tokens: 20000
+  temperature: 0.7
+  top_p: 0.8
+  seed: 1
 
-# Input dataset and output file configuration
+# Database configuration
+database:
+  path: "data/queue.db"
+
+# API server settings
+api_server:
+  host: "0.0.0.0"
+  port: 8000
+
+# Dataset configuration (for batch mode)
 dataset:
-  repo_type: hf                # 'hf' for Hugging Face, 'local' for local files
-  output: "data/output/gsm8k_generated.jsonl" # Path to save results
-  batch_size: 1000 # Number of prompts to process before saving results
+  repo_type: hf
+  output: "data/output/generated.jsonl"
   
-  # --- Hugging Face dataset options ---
   hf:
-    repo: "openai/gsm8k"       # HF repository name
-    subset: "main"             # HF dataset subset (optional)
-    split: "test"              # Dataset split to use
-
-  # --- Local file options ---
-  local:
-    format: "parquet"          # Format of the local file (e.g., "json", "parquet")
-    data_files: "../data/input/gsm8k_test.parquet" # Path to local data file
-    split: "test"
-
-  # --- Dataset processing options ---
-  take: 100                    # Limit to the first N samples from the dataset
-  rename_columns:              # Rename columns to standardize
-    - ["question", "prompt"]
-  select_columns:              # Select only the columns you need
-    - "prompt"
+    repo: "BAAI/Infinity-Instruct"
+    subset: "7M"
+    split: "train"
+    streaming: true
+  
+  n_samples: 1000
 ```
 
 ## Usage
 
-1.  **Set your Cerebras API Key:**
-    The script reads the API key from an environment variable.
+### API Server Mode (Recommended)
 
+1.  **Set your Cerebras API Key:**
     ```sh
     export CEREBRAS_API_KEY='your-api-key-here'
     ```
 
-2.  **Run the generator:**
-    Navigate to the `src` directory and run the script.
-
+2.  **Start the API Server:**
     ```sh
     cd src
-    python generator.py
+    python api_server.py
     ```
 
-    A progress bar will appear in your terminal, showing the status of the inference tasks.
+3.  **Submit requests using the client:**
+    ```sh
+    python api_client.py \
+        --dataset-repo "BAAI/Infinity-Instruct" \
+        --dataset-subset "7M" \
+        --n-samples 1000 \
+        --max-concurrency 100 \
+        --output-file "results.jsonl"
+    ```
 
-    ```
-    LLM batch inference: 100%|██████████| 100/100 [00:58<00:00,  1.71it/s]
-    ```
+### Batch Mode (Direct Processing)
+
+For direct processing without the API server:
+
+```sh
+cd src
+python generator.py
+```
+
+## API Endpoints
+
+### POST `/generate`
+Submit a generation request:
+
+```json
+{
+  "conversations": [
+    {"from": "human", "value": "What is machine learning?"}
+  ],
+  "model": "qwen-3-32b",
+  "metadata": {"id": "example-1"}
+}
+```
+
+Response:
+```json
+{
+  "request_id": "task:12345-67890",
+  "message": "Request accepted for processing."
+}
+```
+
+### GET `/result/{request_id}`
+Check request status and get results:
+
+- **202**: Still processing
+- **200**: Completed (returns generated content)
+- **500**: Failed (returns error details)
+- **404**: Request not found
+
+### GET `/health`
+Health check endpoint
+
+### GET `/stats`
+Get queue statistics:
+
+```json
+{
+  "queue_stats": {
+    "pending": 150,
+    "processing": 45,
+    "completed": 0,
+    "failed": 2
+  },
+  "total_tasks": 197
+}
+```
+
+## Performance Tuning
+
+### Worker Concurrency
+Adjust based on your system capabilities:
+
+```yaml
+worker:
+  concurrency: 500  # Increase for more throughput
+```
+
+### Model-Specific Limits
+Configure per-model concurrency:
+
+```yaml
+models_to_run:
+  - name: "qwen-3-32b"
+    concurrency:
+      max_concurrent_requests: 20  # Higher for faster models
+```
+
+### Client Concurrency
+Control client-side request submission:
+
+```sh
+python api_client.py --max-concurrency 200
+```
+
+## Monitoring and Debugging
+
+### Real-time Statistics
+Monitor queue status:
+```sh
+curl http://localhost:8000/stats
+```
+
+### Verbose Logging
+Enable detailed logging:
+```sh
+python api_client.py --verbose [other-options]
+```
+
+### Log Files
+- API Server: Check console output for worker status
+- Client: Monitor polling progress and error rates
+
+## Architecture Benefits
+
+1. **High Throughput**: Producer-consumer pattern eliminates database contention
+2. **Fault Tolerance**: Individual task failures don't affect the system
+3. **Scalability**: Easy to scale workers based on load
+4. **Resource Efficiency**: Connection pooling and proper resource management
+5. **Monitoring**: Built-in health checks and statistics
+6. **Flexibility**: Support for multiple models with different configurations
+
+## Troubleshooting
+
+### Database Locked Errors
+If you see "database is locked" errors, the dispatcher-processor architecture should eliminate these. Ensure you're using the latest worker implementation.
+
+### High Memory Usage
+Reduce the worker queue size:
+```yaml
+worker:
+  concurrency: 100  # Reduce if memory is limited
+```
+
+### Slow Processing
+1. Check `/stats` endpoint for queue buildup
+2. Increase worker concurrency if CPU/memory allows
+3. Monitor TTFT for API performance issues
+4. Check Cerebras API rate limits
+
+### Client Timeouts
+Increase polling timeout:
+```sh
+python api_client.py --poll-interval 2.0
+```
 
 ## Output
 
--   **Console Logs**: The script logs information about TTFT, retries, and final success/failure counts to the console.
--   **Generated Data**: Successful generations are saved to the file specified by the `dataset.output` path in your `inference-config.yaml`. Each line in the output file is a JSON object containing the model, the generated response, and the measured TTFT.
+-   **API Mode**: Results saved to specified output file in JSONL format
+-   **Console Logs**: Progress tracking, TTFT monitoring, and error reporting
+-   **Statistics**: Real-time queue status via `/stats` endpoint
+
+Each output line contains:
+```json
+{
+  "id": "example-1",
+  "conversations": [
+    {"from": "human", "value": "What is machine learning?"},
+    {"from": "gpt", "value": "Machine learning is..."}
+  ],
+  "model": "qwen-3-32b",
+  "source": "BAAI/Infinity-Instruct"
+}
+```
