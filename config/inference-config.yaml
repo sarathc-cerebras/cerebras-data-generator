@@ -1,8 +1,8 @@
 models_to_run:
   - name: "qwen-3-32b"
     concurrency:
-      max_concurrent_requests: 30
-      min_concurrent_requests: 0
+      max_concurrent_requests: 40
+      min_concurrent_requests: 1
       recover_threshold: 10
     generation:
       stream: true
