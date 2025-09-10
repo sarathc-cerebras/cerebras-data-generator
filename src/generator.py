@@ -229,7 +229,11 @@ def get_processed_ids(output_file: str) -> set:
 def initialize_shared_resources(config: Dict[str, Any]):
     """Initializes resources shared by all modes (client, models, etc.)."""
     API_STATE["config"] = config
-    API_STATE["client"] = AsyncCerebras()
+    
+    # Increase the timeout for the HTTP client to prevent premature timeouts.
+    # 300 seconds (5 minutes) is a safe value for long-running generation tasks.
+    request_timeout = config.get('load_monitoring', {}).get('request_timeout', 300.0)
+    API_STATE["client"] = AsyncCerebras(timeout=request_timeout)
 
     models_config = config.get('models_to_run', [])
     if not models_config:
@@ -318,7 +322,10 @@ async def process_continuously(
     data_to_process: List[Dict[str, Any]],
     config: Dict[str, Any]
 ):
-    """Runs the main inference loop for batch processing."""
+    """
+    Runs the main inference loop for batch processing using a bounded task buffer
+    to manage memory for very large datasets.
+    """
     client = API_STATE["client"]
     output_file = f"{config['dataset']['output']}"
     model_resources = API_STATE["model_resources"]
@@ -326,25 +333,49 @@ async def process_continuously(
     if not data_to_process:
         logging.info("All items from the dataset have already been processed.")
         return
-        
+
+    # Define a sensible buffer for tasks. This prevents creating millions of tasks at once.
+    # A multiple of the total max concurrency is a good heuristic.
+    total_max_concurrency = sum(res["semaphore"]._value for res in model_resources.values())
+    task_buffer_size = total_max_concurrency * 10  # e.g., if total concurrency is 100, buffer is 400.
+
+    logging.info(f"Starting batch processing for {len(data_to_process)} items with a task buffer of {task_buffer_size}.")
+
+    data_iterator = iter(data_to_process)
     model_cycler = cycle(model_resources.items())
+    tasks = set()
 
-    tasks = [
-        asyncio.create_task(process_single_item(
-            item, client, resources["semaphore"], config, resources["manager"], model_name, resources["config"]
-        ))
-        for item, (model_name, resources) in zip(data_to_process, model_cycler)
-    ]
-
-    logging.info(f"Starting batch processing for {len(tasks)} remaining items.")
-    
     # Open the file in "append" mode.
-    with open(output_file, "a") as f, tqdm.asyncio.tqdm(total=len(tasks), desc="Batch Inference") as pbar:
-        for future in asyncio.as_completed(tasks):
-            res = await future
-            if res and res.get("success"):
-                f.write(json.dumps(res["result"]) + "\n")
-            pbar.update(1)
+    with open(output_file, "a") as f, tqdm.asyncio.tqdm(total=len(data_to_process), desc="Batch Inference") as pbar:
+        while True:
+            # Create new tasks until the buffer is full or the data is exhausted.
+            while len(tasks) < task_buffer_size:
+                try:
+                    item = next(data_iterator)
+                    model_name, resources = next(model_cycler)
+                    task = asyncio.create_task(process_single_item(
+                        item, client, resources["semaphore"], config, resources["manager"], model_name, resources["config"]
+                    ))
+                    tasks.add(task)
+                except StopIteration:
+                    # No more items to process.
+                    break
+            
+            if not tasks:
+                # All tasks are created and have completed.
+                break
+
+            # Wait for the next task in the buffer to complete.
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+
+            for future in done:
+                res = await future
+                if res and res.get("success"):
+                    f.write(json.dumps(res["result"]) + "\n")
+                pbar.update(1)
+            
+            # The set of active tasks is now the set of pending tasks.
+            tasks = pending
 
 # --- Orchestrator for Batch Mode ---
 async def main():
