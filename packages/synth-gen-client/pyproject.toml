@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "synth-gen-client"
+version = "0.1.0"
+authors = [
+  { name="Sarath Chandran", email="sarath.chandran@cerebras.net" },
+]
+description = "An asynchronous client for the Synthetic Data Generation API."
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "httpx>=0.25.0",
+    "tqdm>=4.66.0"
+]
+
+[project.urls]
+"Homepage" = "https://github.com/sarathc-cerebras/cerebras-data-generator"

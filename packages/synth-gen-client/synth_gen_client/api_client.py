@@ -1,3 +1,4 @@
+import os
 import asyncio
 import httpx
 import logging
@@ -5,7 +6,7 @@ from tqdm.asyncio import tqdm
 from typing import List, Dict, Any, Optional, AsyncGenerator
 
 # --- Configuration ---
-API_BASE_URL = "http://localhost:8000"
+CEREBRAS_PROXY_API_URL = os.getenv("CEREBRAS_PROXY_API_URL", "http://localhost:8000")
 logging.basicConfig(level=logging.WARNING, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- Custom Exceptions for the Client ---
@@ -23,12 +24,12 @@ class ServerNotReachableError(Exception):
     """Raised when the API server cannot be reached."""
     pass
 
-# --- The new AsyncSynthGenClient Wrapper ---
+# --- The AsyncSynthGenClient Wrapper ---
 class AsyncSynthGenClient:
     """
     An asynchronous client for the Synthetic Data Generation API.
     """
-    def __init__(self, base_url: str = API_BASE_URL, poll_interval: float = 1.0, request_timeout: float = 300.0):
+    def __init__(self, base_url: str = CEREBRAS_PROXY_API_URL, poll_interval: float = 1.0, request_timeout: float = 300.0):
         self.base_url = base_url
         self.poll_interval = poll_interval
         self.request_timeout = request_timeout
@@ -51,40 +52,25 @@ class AsyncSynthGenClient:
     ) -> Dict[str, Any]:
         """
         Submits a single generation job and waits for the final result.
-
-        Args:
-            conversations: The conversation history.
-            model: The model to use for generation.
-            metadata: Optional metadata to include.
-
-        Returns:
-            The final generated data.
-
-        Raises:
-            GenerationFailedError: If the task fails on the server.
-            PollingTimeoutError: If polling for the result times out.
-            ServerNotReachableError: If the server is unreachable.
         """
         try:
-            # 1. Submit the job
             request_payload = {"conversations": conversations, "model": model, "metadata": metadata}
             response = await self._client.post("/generate", json=request_payload)
             response.raise_for_status()
             request_id = response.json().get("request_id")
 
-            # 2. Poll for the result
             start_time = asyncio.get_event_loop().time()
             while (asyncio.get_event_loop().time() - start_time) < self.request_timeout:
                 result_response = await self._client.get(f"/result/{request_id}")
 
-                if result_response.status_code == 200:  # Completed
+                if result_response.status_code == 200:
                     return result_response.json()
-                elif result_response.status_code == 500:  # Failed
+                elif result_response.status_code == 500:
                     raise GenerationFailedError("Generation task failed on the server.", details=result_response.json())
-                elif result_response.status_code == 202:  # Still processing
+                elif result_response.status_code == 202:
                     await asyncio.sleep(self.poll_interval)
                 else:
-                    result_response.raise_for_status() # Raise for other client/server errors
+                    result_response.raise_for_status()
             
             raise PollingTimeoutError(f"Polling for request {request_id} timed out after {self.request_timeout}s.")
 
@@ -105,7 +91,6 @@ class AsyncSynthGenClient:
         async def _process_one(item):
             async with semaphore:
                 try:
-                    # Assumes item has 'conversations' and optional 'id'
                     return await self.generate(
                         conversations=item["conversations"],
                         model=model,
@@ -113,7 +98,7 @@ class AsyncSynthGenClient:
                     )
                 except Exception as e:
                     logging.error(f"Error processing item {item.get('id', 'unknown')}: {e}")
-                    return None # Return None for failed items
+                    return None
 
         tasks = [asyncio.create_task(_process_one(item)) for item in items]
 

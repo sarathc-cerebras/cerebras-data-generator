@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import json
-import aiosqlite
 from generator import (
     API_STATE,
     process_single_item
