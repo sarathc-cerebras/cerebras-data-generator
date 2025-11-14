@@ -7,6 +7,7 @@ from typing import List, Dict, Any, Optional, AsyncGenerator
 
 # --- Configuration ---
 CEREBRAS_PROXY_API_URL = os.getenv("CEREBRAS_PROXY_API_URL", "http://localhost:8000")
+CEREBRAS_PROXY_API_TOKEN = os.getenv("CEREBRAS_PROXY_API_TOKEN", "")
 logging.basicConfig(level=logging.WARNING, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- Custom Exceptions for the Client ---
@@ -24,18 +25,36 @@ class ServerNotReachableError(Exception):
     """Raised when the API server cannot be reached."""
     pass
 
+class AuthenticationError(Exception):
+    """Raised when authentication fails."""
+    pass
+
 # --- The AsyncSynthGenClient Wrapper ---
 class AsyncSynthGenClient:
     """
     An asynchronous client for the Synthetic Data Generation API.
     """
-    def __init__(self, base_url: str = CEREBRAS_PROXY_API_URL, poll_interval: float = 1.0, request_timeout: float = 300.0):
+    def __init__(
+        self, 
+        base_url: str = CEREBRAS_PROXY_API_URL, 
+        api_token: Optional[str] = None,
+        poll_interval: float = 1.0, 
+        request_timeout: float = 300.0
+    ):
         self.base_url = base_url
+        self.api_token = api_token or CEREBRAS_PROXY_API_TOKEN
         self.poll_interval = poll_interval
         self.request_timeout = request_timeout
+        
+        # Setup headers with authentication
+        headers = {}
+        if self.api_token:
+            headers["Authorization"] = f"Bearer {self.api_token}"
+        
         limits = httpx.Limits(max_connections=200, max_keepalive_connections=50)
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
+            headers=headers,
             timeout=httpx.Timeout(timeout=self.request_timeout, pool=60, connect=10.0),
             limits=limits,
         )
@@ -56,6 +75,10 @@ class AsyncSynthGenClient:
         try:
             request_payload = {"conversations": conversations, "model": model, "metadata": metadata}
             response = await self._client.post("/generate", json=request_payload)
+            
+            if response.status_code == 401:
+                raise AuthenticationError("Invalid or missing authentication token")
+            
             response.raise_for_status()
             return response.json().get("request_id")
         except httpx.RequestError as e:
@@ -69,6 +92,9 @@ class AsyncSynthGenClient:
             try:
                 result_response = await self._client.get(f"/result/{request_id}")
 
+                if result_response.status_code == 401:
+                    raise AuthenticationError("Invalid or missing authentication token")
+                
                 if result_response.status_code == 200:
                     return result_response.json()
                 elif result_response.status_code == 500:

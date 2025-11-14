@@ -1,16 +1,16 @@
 import asyncio
 import logging
-import json
 import uuid
 import os
-from typing import Optional, AsyncGenerator
+from typing import Optional, List
 from contextlib import asynccontextmanager
 
 import uvicorn
-import aiosqlite
-from fastapi import FastAPI, HTTPException, Depends
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException, Security, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import JSONResponse, HTMLResponse
 from pydantic import BaseModel
+import yaml
 
 from generator import (
     load_configuration,
@@ -18,6 +18,15 @@ from generator import (
     API_STATE
 )
 from worker import run_workers
+from database import DatabaseManager
+
+security = HTTPBearer()
+
+VALID_API_TOKENS = set(
+    token.strip() 
+    for token in os.getenv("API_AUTH_TOKENS", "").split(",") 
+    if token.strip()
+)
 
 # --- Pydantic Models for API ---
 class GenerationRequest(BaseModel):
@@ -25,157 +34,234 @@ class GenerationRequest(BaseModel):
     model: Optional[str] = None
     metadata: Optional[dict] = None
 
+class ModelConfig(BaseModel):
+    name: str
+    concurrency: dict
+    generation: dict
+
+class ConfigUpdate(BaseModel):
+    models_to_run: Optional[List[ModelConfig]] = None
+    worker: Optional[dict] = None
+    concurrency: Optional[dict] = None
+    load_monitoring: Optional[dict] = None
+
 # --- Lifespan Event Handler ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Manages application startup and shutdown events, including the DB pool.
-    """
+    """Manages application startup and shutdown events."""
     logging.info("API Server starting up...")
     config = load_configuration("config/inference-config.yaml")
     if not config:
         raise RuntimeError("Failed to load configuration.")
 
+    # Initialize database
+    database_url = os.getenv(
+        "DATABASE_URL",
+        "postgresql://cerebras:changeme@localhost:5432/cerebras_data_gen"
+    )
+    db_manager = DatabaseManager(database_url)
+    await db_manager.connect()
+    API_STATE["db_manager"] = db_manager
+    
+    # Initialize shared resources
     initialize_shared_resources(config)
+    logging.info(f"Initialized models: {list(API_STATE['model_resources'].keys())}")
     
-    db_path = config['database']['path']
+    if API_STATE.get("client") is None:
+        raise RuntimeError("Client not initialized in API_STATE")
+    if not API_STATE.get("model_resources"):
+        raise RuntimeError("No model resources configured")
     
-    # Ensure the database directory exists
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
-    await setup_database(db_path)
+    logging.info("Starting worker system.")
+    worker_task = asyncio.create_task(run_workers())
     
-    # Size the connection pool appropriately
-    worker_concurrency = config.get("worker", {}).get("concurrency", 200)
-    pool_size = worker_concurrency + 10  # Extra connections for API endpoints
-    
-    db_pool = asyncio.Queue(maxsize=pool_size)
-    all_connections = []
-    
-    for _ in range(pool_size):
-        db = await aiosqlite.connect(db_path)
-        db.row_factory = aiosqlite.Row
-        await db_pool.put(db)
-        all_connections.append(db)
-    
-    API_STATE["db_pool"] = db_pool
-    API_STATE["all_db_connections"] = all_connections
-
-    logging.info(f"Database connection pool created with size {pool_size}.")
-    logging.info(f"Starting worker system with {worker_concurrency} concurrent workers.")
-    
-    # Start the worker system
-    asyncio.create_task(run_workers())
+    await asyncio.sleep(0.5)
+    logging.info("✅ API Server fully initialized and ready")
     
     yield
 
     logging.info("Shutting down...")
-    if API_STATE.get("all_db_connections"):
-        for db in API_STATE["all_db_connections"]:
-            await db.close()
-        logging.info("Database connections closed.")
+    worker_task.cancel()
+    
+    try:
+        await worker_task
+    except asyncio.CancelledError:
+        pass
+    
+    await db_manager.disconnect()
 
 # --- FastAPI App Initialization ---
 app = FastAPI(lifespan=lifespan)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-async def get_db() -> AsyncGenerator[aiosqlite.Connection, None]:
-    """FastAPI dependency to safely get a DB connection from the pool."""
-    pool = API_STATE["db_pool"]
-    db = await pool.get()
-    try:
-        yield db
-    finally:
-        await pool.put(db)
-
-async def setup_database(db_path: str):
-    """Initialize the database with proper schema and settings."""
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA journal_mode=WAL;")
-        await db.execute("PRAGMA synchronous=NORMAL;")
-        await db.execute("PRAGMA cache_size=10000;")
-        await db.execute("PRAGMA temp_store=memory;")
-        
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS tasks (
-                request_id TEXT PRIMARY KEY,
-                model_name TEXT NOT NULL,
-                payload TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'pending',
-                result TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        # Create an index for faster queries
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_status_created ON tasks(status, created_at);")
-        await db.commit()
+async def verify_token(credentials: HTTPAuthorizationCredentials = Security(security)):
+    """Verify the API authentication token."""
+    token = credentials.credentials
     
-    logging.info(f"Database initialized at {db_path} with optimized settings.")
+    if not VALID_API_TOKENS:
+        logging.warning("No API_AUTH_TOKENS configured - authentication disabled")
+        return token
+    
+    if token not in VALID_API_TOKENS:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing authentication token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return token
 
+# --- Admin Endpoints ---
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_page():
+    """Serve the admin configuration page."""
+    with open("src/index.html", "r") as f:
+        return HTMLResponse(content=f.read())
+
+@app.get("/api/config")
+async def get_current_config(token: str = Depends(verify_token)):
+    """Get the current runtime configuration."""
+    return {
+        "models_to_run": API_STATE.config.get("models_to_run", []),
+        "worker": API_STATE.config.get("worker", {}),
+        "concurrency": API_STATE.config.get("concurrency", {}),
+        "load_monitoring": API_STATE.config.get("load_monitoring", {}),
+        "api_server": API_STATE.config.get("api_server", {})
+    }
+
+@app.put("/api/config")
+async def update_config(config_update: ConfigUpdate, token: str = Depends(verify_token)):
+    """Update runtime configuration dynamically."""
+    try:
+        if config_update.models_to_run is not None:
+            API_STATE.config["models_to_run"] = [
+                model.dict() for model in config_update.models_to_run
+            ]
+        
+        if config_update.worker is not None:
+            API_STATE.config["worker"] = config_update.worker
+        
+        if config_update.concurrency is not None:
+            API_STATE.config["concurrency"] = config_update.concurrency
+        
+        if config_update.load_monitoring is not None:
+            API_STATE.config["load_monitoring"] = config_update.load_monitoring
+        
+        config_path = "config/inference-config.yaml"
+        with open(config_path, "w") as f:
+            yaml.dump(API_STATE.config, f, default_flow_style=False, sort_keys=False)
+        
+        return {"status": "success", "message": "Configuration updated successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/config/reload")
+async def reload_config_from_file(token: str = Depends(verify_token)):
+    """Reload configuration from the YAML file."""
+    try:
+        config_path = "config/inference-config.yaml"
+        new_config = load_configuration(config_path)
+        API_STATE.config = new_config
+        return {"status": "success", "message": "Configuration reloaded from file"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/workers/status")
+async def get_workers_status(token: str = Depends(verify_token)):
+    """Get current worker status."""
+    db_manager = API_STATE.get("db_manager")
+    stats = await db_manager.get_queue_stats()
+    
+    return {
+        "total_workers": API_STATE.config.get("worker", {}).get("concurrency", 0),
+        "active_tasks": stats.get('processing', 0),
+        "models": [
+            {
+                "name": model["name"],
+                "max_concurrent": model.get("concurrency", {}).get("max_concurrent_requests", 0),
+                "min_concurrent": model.get("concurrency", {}).get("min_concurrent_requests", 0)
+            }
+            for model in API_STATE.config.get("models_to_run", [])
+        ]
+    }
+    
 @app.post("/generate", status_code=202)
-async def enqueue_generation(request: GenerationRequest, db: aiosqlite.Connection = Depends(get_db)):
+async def enqueue_generation(request: GenerationRequest, token: str = Depends(verify_token)):
     """Enqueue a generation request."""
     request_id = f"task:{uuid.uuid4()}"
-    model_name = request.model or next(API_STATE["model_cycler"])[0]
     
-    try:
-        await db.execute(
-            "INSERT INTO tasks (request_id, model_name, payload, status) VALUES (?, ?, ?, 'pending')",
-            (request_id, model_name, request.json())
-        )
-        await db.commit()
-        logging.info(f"Enqueued task {request_id} for model {model_name}")
-    except Exception as e:
-        logging.error(f"Failed to enqueue task: {e}")
-        raise HTTPException(status_code=500, detail="Could not enqueue request.")
+    model_cycler = API_STATE.get("model_cycler")
+    if not model_cycler:
+        raise HTTPException(status_code=503, detail="Model cycler not initialized")
     
+    model_name = request.model or next(model_cycler)[0]
+    
+    db_manager = API_STATE.get("db_manager")
+    success = await db_manager.create_task(
+        request_id=request_id,
+        model=model_name,
+        conversations=request.conversations,
+        metadata=request.metadata or {}
+    )
+    
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to create task")
+    
+    logging.info(f"Created task {request_id} for model {model_name}")
     return {"request_id": request_id, "message": "Request accepted for processing."}
 
 @app.get("/result/{request_id}")
-async def get_generation_result(request_id: str, db: aiosqlite.Connection = Depends(get_db)):
+async def get_generation_result(request_id: str, token: str = Depends(verify_token)):
     """Get the result of a generation request."""
-    async with db.execute("SELECT status, result FROM tasks WHERE request_id = ?", (request_id,)) as cursor:
-        row = await cursor.fetchone()
+    db_manager = API_STATE.get("db_manager")
+    task = await db_manager.get_task(request_id)
     
-    if not row:
+    if not task:
         raise HTTPException(status_code=404, detail="Request ID not found.")
     
-    status, result_json = row
+    status = task['status']
     
     if status == 'completed':
-        # Clean up completed task
-        await db.execute("DELETE FROM tasks WHERE request_id = ?", (request_id,))
-        await db.commit()
-        return JSONResponse(content=json.loads(result_json))
+        return JSONResponse(content=task['result'])
     elif status == 'failed':
-        # Clean up failed task
-        await db.execute("DELETE FROM tasks WHERE request_id = ?", (request_id,))
-        await db.commit()
         return JSONResponse(
-            status_code=500, 
-            content={"request_id": request_id, "status": "failed", "detail": result_json}
+            status_code=500,
+            content={"request_id": request_id, "status": "failed", "error": task['error']}
         )
     else:
-        # Task is still pending or processing
         return JSONResponse(
-            status_code=202, 
+            status_code=202,
             content={"request_id": request_id, "status": status}
         )
 
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "healthy", "message": "API server is running"}
+    db_manager = API_STATE.get("db_manager")
+    try:
+        # Check database connection
+        await db_manager.get_queue_stats()
+        return {"status": "healthy", "message": "API server is running", "database": "connected"}
+    except Exception as e:
+        return {"status": "degraded", "message": "API server running but database issue", "error": str(e)}
 
 @app.get("/stats")
-async def get_stats(db: aiosqlite.Connection = Depends(get_db)):
+async def get_stats(token: str = Depends(verify_token)):
     """Get queue statistics."""
-    async with db.execute("SELECT status, COUNT(*) as count FROM tasks GROUP BY status") as cursor:
-        stats = {row[0]: row[1] for row in await cursor.fetchall()}
+    db_manager = API_STATE.get("db_manager")
+    stats = await db_manager.get_queue_stats()
+    
+    work_queue = API_STATE.get("work_queue")
+    queue_size = work_queue.qsize() if work_queue else 0
     
     return {
-        "queue_stats": stats,
-        "total_tasks": sum(stats.values())
+        "queue_stats": {
+            "pending": stats.get('pending', 0),
+            "processing": stats.get('processing', 0),
+            "completed": stats.get('completed', 0),
+            "failed": stats.get('failed', 0)
+        },
+        "total_tasks": stats.get('total', 0),
+        "queue_size": queue_size
     }
 
 def main():
@@ -188,8 +274,8 @@ def main():
         "api_server:app", 
         host=api_config.get("host", "0.0.0.0"), 
         port=api_config.get("port", 8000), 
-        reload=False,  # Disable reload for production
-        log_level="warning"
+        reload=False,
+        log_level="info"
     )
 
 if __name__ == "__main__":

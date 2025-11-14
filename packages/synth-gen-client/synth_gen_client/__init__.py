@@ -4,7 +4,8 @@ from .api_client import (
     AsyncSynthGenClient,
     GenerationFailedError,
     PollingTimeoutError,
-    ServerNotReachableError
+    ServerNotReachableError,
+    AuthenticationError
 )
 
 __version__ = "0.1.0"
@@ -12,5 +13,6 @@ __all__ = [
     "AsyncSynthGenClient",
     "GenerationFailedError",
     "PollingTimeoutError",
-    "ServerNotReachableError"
+    "ServerNotReachableError",
+    "AuthenticationError"
 ]

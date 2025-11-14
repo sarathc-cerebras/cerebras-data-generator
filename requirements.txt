@@ -2,5 +2,6 @@ cerebras-cloud-sdk
 pyyaml
 datasets
 httpx
-aiosqlite
 fastapi[all]
+asyncpg
+psycopg2-binary

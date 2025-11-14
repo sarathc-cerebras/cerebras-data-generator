@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: cerebras_data_gen
+      POSTGRES_USER: cerebras
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cerebras"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api_server:
+    build: .
+    environment:
+      - CEREBRAS_API_KEY=${CEREBRAS_API_KEY}
+      - API_AUTH_TOKENS=${API_AUTH_TOKENS}
+      - DATABASE_URL=postgresql://cerebras:${POSTGRES_PASSWORD:-changeme}@postgres:5432/cerebras_data_gen
+      - PYTHONUNBUFFERED=1
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./src:/app/src
+      - ./config:/app/config
+      - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
