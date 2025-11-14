@@ -6,11 +6,13 @@ from typing import Optional, List
 from contextlib import asynccontextmanager
 
 import uvicorn
+from metrics import MetricsTracker
 from fastapi import FastAPI, HTTPException, Security, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import JSONResponse, HTMLResponse
 from pydantic import BaseModel
 import yaml
+import time
 
 from generator import (
     load_configuration,
@@ -63,6 +65,10 @@ async def lifespan(app: FastAPI):
     await db_manager.connect()
     API_STATE["db_manager"] = db_manager
     
+    # Initialize metrics tracker
+    metrics_tracker = MetricsTracker(window_seconds=60)
+    API_STATE["metrics_tracker"] = metrics_tracker
+    
     # Initialize shared resources
     initialize_shared_resources(config)
     logging.info(f"Initialized models: {list(API_STATE['model_resources'].keys())}")
@@ -110,10 +116,9 @@ async def verify_token(credentials: HTTPAuthorizationCredentials = Security(secu
         )
     return token
 
-# --- Admin Endpoints ---
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_page():
-    """Serve the admin configuration page."""
+    """Serve the admin configuration page (no auth required to load the page)."""
     with open("src/index.html", "r") as f:
         return HTMLResponse(content=f.read())
 
@@ -121,11 +126,11 @@ async def admin_page():
 async def get_current_config(token: str = Depends(verify_token)):
     """Get the current runtime configuration."""
     return {
-        "models_to_run": API_STATE.config.get("models_to_run", []),
-        "worker": API_STATE.config.get("worker", {}),
-        "concurrency": API_STATE.config.get("concurrency", {}),
-        "load_monitoring": API_STATE.config.get("load_monitoring", {}),
-        "api_server": API_STATE.config.get("api_server", {})
+        "models_to_run": API_STATE["config"].get("models_to_run", []),
+        "worker": API_STATE["config"].get("worker", {}),
+        "concurrency": API_STATE["config"].get("concurrency", {}),
+        "load_monitoring": API_STATE["config"].get("load_monitoring", {}),
+        "api_server": API_STATE["config"].get("api_server", {})
     }
 
 @app.put("/api/config")
@@ -133,22 +138,22 @@ async def update_config(config_update: ConfigUpdate, token: str = Depends(verify
     """Update runtime configuration dynamically."""
     try:
         if config_update.models_to_run is not None:
-            API_STATE.config["models_to_run"] = [
+            API_STATE["config"]["models_to_run"] = [
                 model.dict() for model in config_update.models_to_run
             ]
         
         if config_update.worker is not None:
-            API_STATE.config["worker"] = config_update.worker
+            API_STATE["config"]["worker"] = config_update.worker
         
         if config_update.concurrency is not None:
-            API_STATE.config["concurrency"] = config_update.concurrency
+            API_STATE["config"]["concurrency"] = config_update.concurrency
         
         if config_update.load_monitoring is not None:
-            API_STATE.config["load_monitoring"] = config_update.load_monitoring
+            API_STATE["config"]["load_monitoring"] = config_update.load_monitoring
         
         config_path = "config/inference-config.yaml"
         with open(config_path, "w") as f:
-            yaml.dump(API_STATE.config, f, default_flow_style=False, sort_keys=False)
+            yaml.dump(API_STATE["config"], f, default_flow_style=False, sort_keys=False)
         
         return {"status": "success", "message": "Configuration updated successfully"}
     except Exception as e:
@@ -160,29 +165,75 @@ async def reload_config_from_file(token: str = Depends(verify_token)):
     try:
         config_path = "config/inference-config.yaml"
         new_config = load_configuration(config_path)
-        API_STATE.config = new_config
+        
+        if not new_config:
+            raise HTTPException(status_code=500, detail="Failed to load configuration file")
+        
+        API_STATE["config"] = new_config
+        
+        # Reinitialize model resources if needed
+        model_resources = initialize_shared_resources(new_config)
+        API_STATE["model_resources"] = model_resources
+        
         return {"status": "success", "message": "Configuration reloaded from file"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logging.error(f"Error reloading config: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to reload config: {str(e)}")
+
 
 @app.get("/api/workers/status")
 async def get_workers_status(token: str = Depends(verify_token)):
-    """Get current worker status."""
-    db_manager = API_STATE.get("db_manager")
-    stats = await db_manager.get_queue_stats()
+    """Get worker system status."""
+    work_queue = API_STATE.get("work_queue")
+    model_resources = API_STATE.get("model_resources")
+    config = API_STATE.get("config", {})
+    
+    worker_config = config.get("worker", {})
+    total_workers = worker_config.get("concurrency", 200)
+    
+    # Get active tasks from queue
+    active_tasks = work_queue.qsize() if work_queue else 0
+    
+    # Get models list
+    models = list(model_resources.keys()) if model_resources else []
     
     return {
-        "total_workers": API_STATE.config.get("worker", {}).get("concurrency", 0),
-        "active_tasks": stats.get('processing', 0),
-        "models": [
-            {
-                "name": model["name"],
-                "max_concurrent": model.get("concurrency", {}).get("max_concurrent_requests", 0),
-                "min_concurrent": model.get("concurrency", {}).get("min_concurrent_requests", 0)
-            }
-            for model in API_STATE.config.get("models_to_run", [])
-        ]
+        "total_workers": total_workers,
+        "active_tasks": active_tasks,
+        "models": models,
+        "queue_capacity": work_queue.maxsize if work_queue else 0
     }
+
+@app.get("/stats")
+async def get_stats(token: str = Depends(verify_token)):
+    """Get queue and system statistics."""
+    db_manager = API_STATE.get("db_manager")
+    work_queue = API_STATE.get("work_queue")
+    
+    if not db_manager:
+        raise HTTPException(status_code=503, detail="Database manager not initialized")
+    
+    # Get queue stats from database
+    queue_stats = await db_manager.get_queue_stats()
+    
+    # Get memory queue info
+    memory_queue_size = work_queue.qsize() if work_queue else 0
+    
+    return {
+        "queue_stats": queue_stats,
+        "memory_queue_size": memory_queue_size,
+        "timestamp": time.time()
+    }
+    
+    
+@app.get("/api/metrics")
+async def get_metrics(token: str = Depends(verify_token)):
+    """Get detailed system metrics."""
+    metrics_tracker = API_STATE.get("metrics_tracker")
+    if not metrics_tracker:
+        raise HTTPException(status_code=503, detail="Metrics tracker not initialized")
+    
+    return await metrics_tracker.get_metrics()
     
 @app.post("/generate", status_code=202)
 async def enqueue_generation(request: GenerationRequest, token: str = Depends(verify_token)):
@@ -221,18 +272,36 @@ async def get_generation_result(request_id: str, token: str = Depends(verify_tok
     status = task['status']
     
     if status == 'completed':
-        return JSONResponse(content=task['result'])
+        result = JSONResponse(content=task['result'])
+        
+        # Delete task after result is retrieved
+        try:
+            await db_manager.delete_task(request_id)
+            logging.info(f"Deleted completed task {request_id} from database")
+        except Exception as e:
+            logging.error(f"Failed to delete task {request_id}: {e}")
+        
+        return result
     elif status == 'failed':
-        return JSONResponse(
+        error_response = JSONResponse(
             status_code=500,
             content={"request_id": request_id, "status": "failed", "error": task['error']}
         )
+        
+        # Optionally delete failed tasks too
+        try:
+            await db_manager.delete_task(request_id)
+            logging.info(f"Deleted failed task {request_id} from database")
+        except Exception as e:
+            logging.error(f"Failed to delete task {request_id}: {e}")
+        
+        return error_response
     else:
         return JSONResponse(
             status_code=202,
             content={"request_id": request_id, "status": status}
         )
-
+        
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
@@ -275,7 +344,8 @@ def main():
         host=api_config.get("host", "0.0.0.0"), 
         port=api_config.get("port", 8000), 
         reload=False,
-        log_level="info"
+        log_level="warning",  
+        access_log=False
     )
 
 if __name__ == "__main__":

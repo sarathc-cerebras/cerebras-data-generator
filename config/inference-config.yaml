@@ -1,97 +1,74 @@
 models_to_run:
-  - name: "qwen-3-32b"
-    concurrency:
-      max_concurrent_requests: 10
-      min_concurrent_requests: 0
-      recover_threshold: 100
-    generation:
-      stream: true
-      max_completion_tokens: 8196
-      temperature: 0.6
-      top_p: 0.95
-      seed: 1
-  - name: "qwen-3-235b-a22b-instruct-2507"
-    concurrency:
-      max_concurrent_requests: 10
-      min_concurrent_requests: 0
-      recover_threshold: 100
-    generation:
-      stream: true
-      max_completion_tokens: 8196
-      temperature: 0.7
-      top_p: 0.8
-      seed: 1
-  - name: "qwen-3-235b-a22b-thinking-2507"
-    concurrency:
-      max_concurrent_requests: 12
-      min_concurrent_requests: 0
-      recover_threshold: 100
-    generation:
-      stream: true
-      max_completion_tokens: 8196
-      temperature: 0.6
-      top_p: 0.95
-      seed: 1
-  - name: "qwen-3-coder-480b"
-    concurrency:
-      max_concurrent_requests: 20
-      min_concurrent_requests: 0
-      recover_threshold: 100
-    generation:
-      stream: true
-      max_completion_tokens: 8196
-      temperature: 0.7
-      top_p: 0.8
-      seed: 1
-  - name: "gpt-oss-120b"
-    concurrency:
-      max_concurrent_requests: 40
-      min_concurrent_requests: 0
-      recover_threshold: 100
-    generation:
-      stream: true
-      max_completion_tokens: 8196
-      temperature: 1.0
-      top_p: 1
-      seed: 1
-      reasoning_effort: high
-
-# Global settings used as fallbacks or for shared logic
+- name: qwen-3-32b
+  concurrency:
+    max_concurrent_requests: 10
+    min_concurrent_requests: 0
+    recover_threshold: 100
+  generation:
+    stream: true
+    max_completion_tokens: 8196
+    temperature: 0.6
+    top_p: 0.95
+    seed: 1
+- name: qwen-3-235b-a22b-instruct-2507
+  concurrency:
+    max_concurrent_requests: 10
+    min_concurrent_requests: 0
+    recover_threshold: 100
+  generation:
+    stream: true
+    max_completion_tokens: 8196
+    temperature: 0.7
+    top_p: 0.8
+    seed: 1
+- name: qwen-3-235b-a22b-thinking-2507
+  concurrency:
+    max_concurrent_requests: 12
+    min_concurrent_requests: 0
+    recover_threshold: 100
+  generation:
+    stream: true
+    max_completion_tokens: 8196
+    temperature: 0.6
+    top_p: 0.95
+    seed: 1
+- name: gpt-oss-120b
+  concurrency:
+    max_concurrent_requests: 40
+    min_concurrent_requests: 0
+    recover_threshold: 100
+  generation:
+    stream: true
+    max_completion_tokens: 8196
+    temperature: 1
+    top_p: 1
+    seed: 1
+    reasoning_effort: high
 concurrency:
-  initial_retry_delay: 1.0
-  max_retry_delay: 60.0
+  initial_retry_delay: 1
+  max_retry_delay: 60
   max_retries: 5
-
-# Load Monitoring
 load_monitoring:
-  ttft_threshold: 5.0
-  request_timeout: 120.0
-
-# API Server Settings
+  ttft_threshold: 5
+  request_timeout: 120
 api_server:
-  host: "0.0.0.0"
+  host: 0.0.0.0
   port: 8000
   result_timeout_seconds: 300
-
-# --- SQLite for Persistent Queue ---
 database:
-  path: "data/queue.db" # Path to the SQLite database file
-
+  path: data/queue.db
 worker:
-  concurrency: 200  # Total number of concurrent workers - adjust based on your needs
-
-# Input and Output files
+  concurrency: 200
 dataset:
   repo_type: hf
-  output: "data/output/baai_infinity_instruct_core_generated.jsonl"
-  #n_samples: 10000
+  output: data/output/baai_infinity_instruct_core_generated.jsonl
   hf:
-    repo: "BAAI/Infinity-Instruct"
-    subset: "7M"
-    split: "train"
+    repo: BAAI/Infinity-Instruct
+    subset: 7M
+    split: train
     num_proc: 90
     streaming: true
   local:
-    format: "parquet"
-    data_files: "../data/input/gsm8k_test.parquet"
-    split: "test"
+    format: parquet
+    data_files: ../data/input/gsm8k_test.parquet
+    split: test

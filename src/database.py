@@ -185,6 +185,25 @@ class DatabaseManager:
             logger.error(f"Failed to get queue stats: {e}")
             return {'pending': 0, 'processing': 0, 'completed': 0, 'failed': 0, 'total': 0}
     
+    async def delete_task(self, request_id: str) -> bool:
+        """Delete a task from the database."""
+        try:
+            async with self.pool.acquire() as conn:
+                result = await conn.execute(
+                    """
+                    DELETE FROM tasks 
+                    WHERE request_id = $1
+                    """,
+                    request_id
+                )
+                deleted = result != "DELETE 0"
+                if deleted:
+                    logger.info(f"Deleted task {request_id} from database")
+                return deleted
+        except Exception as e:
+            logger.error(f"Error deleting task {request_id}: {e}")
+            return False
+    
     async def cleanup_old_tasks(self, days: int = 7) -> int:
         """Remove completed tasks older than specified days."""
         try:

@@ -50,12 +50,14 @@ class AsyncSynthGenClient:
         headers = {}
         if self.api_token:
             headers["Authorization"] = f"Bearer {self.api_token}"
+        else:
+            logging.warning("No API token provided. Server may reject requests if authentication is required.")
         
         limits = httpx.Limits(max_connections=200, max_keepalive_connections=50)
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
             headers=headers,
-            timeout=httpx.Timeout(timeout=self.request_timeout, pool=60, connect=10.0),
+            timeout=httpx.Timeout(timeout=self.request_timeout, pool=60.0, connect=10.0),
             limits=limits,
         )
 
@@ -77,7 +79,10 @@ class AsyncSynthGenClient:
             response = await self._client.post("/generate", json=request_payload)
             
             if response.status_code == 401:
-                raise AuthenticationError("Invalid or missing authentication token")
+                raise AuthenticationError(
+                    "Authentication failed. Please check your API token. "
+                    "Set CEREBRAS_PROXY_API_TOKEN environment variable or pass api_token parameter."
+                )
             
             response.raise_for_status()
             return response.json().get("request_id")
@@ -93,7 +98,10 @@ class AsyncSynthGenClient:
                 result_response = await self._client.get(f"/result/{request_id}")
 
                 if result_response.status_code == 401:
-                    raise AuthenticationError("Invalid or missing authentication token")
+                    raise AuthenticationError(
+                        "Authentication failed while polling for result. "
+                        "Please check your API token."
+                    )
                 
                 if result_response.status_code == 200:
                     return result_response.json()
@@ -131,6 +139,7 @@ class AsyncSynthGenClient:
         self,
         items: List[Dict[str, Any]],
         max_concurrency: int,
+        model: Optional[str] = None
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         ✅ OPTIMIZED: Submits ALL jobs first, then polls concurrently.
@@ -145,10 +154,13 @@ class AsyncSynthGenClient:
                 try:
                     request_id = await self._submit_job(
                         conversations=item["conversations"],
-                        model=item.get("model"),
+                        model=item.get("model") or model,
                         metadata=item.get("metadata", {})
                     )
                     return (request_id, item)
+                except AuthenticationError as e:
+                    logging.error(f"Authentication error: {e}")
+                    raise  # Re-raise auth errors to stop batch processing
                 except Exception as e:
                     logging.error(f"Failed to submit item {item.get('id', 'unknown')}: {e}")
                     return (None, item)
@@ -157,10 +169,17 @@ class AsyncSynthGenClient:
         submission_tasks = [asyncio.create_task(_submit_with_limit(item)) for item in items]
         submitted_jobs = []
         
-        for future in tqdm(asyncio.as_completed(submission_tasks), total=len(items), desc="Submitting jobs"):
-            request_id, item = await future
-            if request_id:
-                submitted_jobs.append((request_id, item))
+        try:
+            for future in tqdm(asyncio.as_completed(submission_tasks), total=len(items), desc="Submitting jobs"):
+                request_id, item = await future
+                if request_id:
+                    submitted_jobs.append((request_id, item))
+        except AuthenticationError:
+            # Cancel remaining tasks on auth error
+            for task in submission_tasks:
+                if not task.done():
+                    task.cancel()
+            raise
         
         logging.info(f"✅ Submitted {len(submitted_jobs)}/{len(items)} jobs successfully")
         
@@ -175,6 +194,9 @@ class AsyncSynthGenClient:
                     # Merge original item metadata with result
                     result["original_metadata"] = item.get("metadata", {})
                     return result
+                except AuthenticationError as e:
+                    logging.error(f"Authentication error while polling: {e}")
+                    raise
                 except Exception as e:
                     logging.error(f"Failed to get result for {request_id}: {e}")
                     return None
@@ -185,7 +207,14 @@ class AsyncSynthGenClient:
             for req_id, item in submitted_jobs
         ]
         
-        for future in tqdm(asyncio.as_completed(polling_tasks), total=len(submitted_jobs), desc="Fetching results"):
-            result = await future
-            if result:
-                yield result
+        try:
+            for future in tqdm(asyncio.as_completed(polling_tasks), total=len(submitted_jobs), desc="Fetching results"):
+                result = await future
+                if result:
+                    yield result
+        except AuthenticationError:
+            # Cancel remaining tasks on auth error
+            for task in polling_tasks:
+                if not task.done():
+                    task.cancel()
+            raise

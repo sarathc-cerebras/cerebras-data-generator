@@ -12,7 +12,7 @@
         }
 
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
             padding: 20px;
@@ -21,22 +21,18 @@
         .container {
             max-width: 1400px;
             margin: 0 auto;
-            background: white;
-            border-radius: 12px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-            overflow: hidden;
         }
 
         .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 30px;
             text-align: center;
+            color: white;
+            margin-bottom: 30px;
         }
 
         .header h1 {
             font-size: 2.5em;
             margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
         }
 
         .header p {
@@ -44,635 +40,642 @@
             opacity: 0.9;
         }
 
-        .auth-section {
-            padding: 30px;
-            text-align: center;
-        }
-
-        .auth-input {
-            width: 400px;
-            padding: 12px 20px;
-            font-size: 16px;
-            border: 2px solid #667eea;
-            border-radius: 6px;
-            margin-right: 10px;
-        }
-
-        .content {
-            padding: 30px;
-            display: none;
-        }
-
-        .content.visible {
-            display: block;
-        }
-
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 20px;
             margin-bottom: 30px;
         }
 
         .stat-card {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 25px;
-            border-radius: 10px;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            text-align: center;
         }
 
         .stat-card h3 {
             font-size: 0.9em;
-            opacity: 0.9;
+            color: #666;
             margin-bottom: 10px;
             text-transform: uppercase;
             letter-spacing: 1px;
         }
 
         .stat-card .value {
-            font-size: 2.5em;
+            font-size: 2em;
             font-weight: bold;
-        }
-
-        .section {
-            background: #f8f9fa;
-            padding: 25px;
-            border-radius: 10px;
-            margin-bottom: 25px;
-        }
-
-        .section-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
-        }
-
-        .section-title {
-            font-size: 1.5em;
-            color: #333;
-            font-weight: 600;
-        }
-
-        .model-card {
-            background: white;
-            padding: 20px;
-            border-radius: 8px;
-            margin-bottom: 15px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-        }
-
-        .model-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 15px;
-        }
-
-        .model-name {
-            font-size: 1.2em;
-            font-weight: 600;
             color: #667eea;
         }
 
+        .config-section {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+        }
+
+        .config-section h2 {
+            margin-bottom: 20px;
+            color: #333;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
         .form-group {
-            margin-bottom: 15px;
+            margin-bottom: 20px;
         }
 
-        .form-row {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 15px;
-        }
-
-        label {
+        .form-group label {
             display: block;
-            margin-bottom: 5px;
+            margin-bottom: 8px;
             color: #555;
             font-weight: 500;
-            font-size: 0.9em;
         }
 
-        input[type="number"],
-        input[type="text"],
-        select {
+        .form-group input,
+        .form-group select {
             width: 100%;
-            padding: 10px;
+            padding: 12px;
             border: 2px solid #e0e0e0;
-            border-radius: 6px;
-            font-size: 14px;
+            border-radius: 8px;
+            font-size: 1em;
             transition: border-color 0.3s;
         }
 
-        input[type="number"]:focus,
-        input[type="text"]:focus,
-        select:focus {
+        .form-group input:focus,
+        .form-group select:focus {
             outline: none;
             border-color: #667eea;
         }
 
         .btn {
-            padding: 12px 30px;
+            background: #667eea;
+            color: white;
+            padding: 12px 24px;
             border: none;
-            border-radius: 6px;
-            font-size: 16px;
+            border-radius: 8px;
+            font-size: 1em;
             font-weight: 600;
             cursor: pointer;
             transition: all 0.3s;
-            text-transform: uppercase;
-            letter-spacing: 1px;
+            margin-right: 10px;
         }
 
-        .btn-primary {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-        }
-
-        .btn-primary:hover {
+        .btn:hover {
+            background: #5568d3;
             transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
         }
 
         .btn-secondary {
             background: #6c757d;
-            color: white;
         }
 
         .btn-secondary:hover {
             background: #5a6268;
         }
 
-        .btn-success {
-            background: #28a745;
-            color: white;
+        .model-list {
+            display: grid;
+            gap: 20px;
         }
 
-        .btn-success:hover {
-            background: #218838;
+        .model-item {
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 20px;
+            background: #f8f9fa;
         }
 
-        .btn-danger {
-            background: #dc3545;
-            color: white;
+        .model-item h4 {
+            margin-bottom: 15px;
+            color: #333;
+            font-size: 1.2em;
         }
 
-        .btn-danger:hover {
-            background: #c82333;
+        .model-controls {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 15px;
         }
 
-        .button-group {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
+        .stat-item {
+            text-align: center;
         }
 
-        .alert {
-            padding: 15px 20px;
-            border-radius: 6px;
-            margin-bottom: 20px;
+        .stat-item label {
+            display: block;
+            font-size: 0.85em;
+            color: #666;
+            margin-bottom: 5px;
             font-weight: 500;
         }
 
-        .alert-success {
+        .stat-item .value {
+            font-size: 1.5em;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .success-message, .error-message {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .success-message {
             background: #d4edda;
             color: #155724;
             border: 1px solid #c3e6cb;
         }
 
-        .alert-error {
+        .error-message {
             background: #f8d7da;
             color: #721c24;
             border: 1px solid #f5c6cb;
         }
 
-        .hidden {
-            display: none;
-        }
-
-        .loading {
-            text-align: center;
-            padding: 20px;
-            color: #667eea;
-        }
-
-        .spinner {
-            border: 3px solid #f3f3f3;
-            border-top: 3px solid #667eea;
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            animation: spin 1s linear infinite;
-            margin: 0 auto;
-        }
-
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
-        .checkbox-group {
+        .auth-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.8);
             display: flex;
             align-items: center;
-            gap: 10px;
+            justify-content: center;
+            z-index: 1000;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s;
         }
 
-        .checkbox-group input[type="checkbox"] {
-            width: auto;
-            cursor: pointer;
+        .auth-modal.active {
+            opacity: 1;
+            pointer-events: all;
+        }
+
+        .auth-box {
+            background: white;
+            padding: 40px;
+            border-radius: 16px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+            max-width: 400px;
+            width: 90%;
+            text-align: center;
+        }
+
+        .auth-box h2 {
+            margin-bottom: 15px;
+            color: #333;
+        }
+
+        .auth-box p {
+            color: #666;
+            margin-bottom: 25px;
+        }
+
+        .auth-box input {
+            width: 100%;
+            padding: 14px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 1em;
+            margin-bottom: 20px;
+            transition: border-color 0.3s;
+        }
+
+        .auth-box input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        @media (max-width: 768px) {
+            .stats-grid {
+                grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            }
+
+            .model-controls {
+                grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            }
+
+            .header h1 {
+                font-size: 1.8em;
+            }
         }
     </style>
 </head>
 <body>
+    <!-- Auth Modal -->
+    <div id="authModal" class="auth-modal active">
+        <div class="auth-box">
+            <h2>🔐 Authentication Required</h2>
+            <p>Enter your API token to access the admin panel</p>
+            <input 
+                type="password" 
+                id="authToken" 
+                placeholder="Enter API Token" 
+                onkeypress="if(event.key==='Enter') authenticate()"
+                autofocus
+            />
+            <button class="btn" onclick="authenticate()">Continue</button>
+        </div>
+    </div>
+
     <div class="container">
         <div class="header">
             <h1>🧠 Cerebras Data Generator</h1>
             <p>Admin Configuration Panel</p>
         </div>
 
-        <div class="auth-section" id="authSection">
-            <h2 style="margin-bottom: 20px;">Authentication Required</h2>
-            <input type="password" id="apiToken" class="auth-input" placeholder="Enter API Token">
-            <button onclick="authenticate()" class="btn btn-primary">Login</button>
+        <div class="stats-grid">
+            <div class="stat-card">
+                <h3>RPM (Sent)</h3>
+                <div class="value" id="rpmSent">0.0</div>
+            </div>
+            <div class="stat-card">
+                <h3>RPM (Completed)</h3>
+                <div class="value" id="rpmCompleted">0.0</div>
+            </div>
+            <div class="stat-card">
+                <h3>Avg Latency</h3>
+                <div class="value" id="avgLatency">0.00s</div>
+            </div>
+            <div class="stat-card">
+                <h3>Success Rate</h3>
+                <div class="value" id="successRate">0.0%</div>
+            </div>
+            <div class="stat-card">
+                <h3>Uptime</h3>
+                <div class="value" id="uptime">0.0h</div>
+            </div>
+            <div class="stat-card">
+                <h3>Rate Limits</h3>
+                <div class="value" id="rateLimits">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>Queue Pending</h3>
+                <div class="value" id="queueStatus">0 pending</div>
+            </div>
+            <div class="stat-card">
+                <h3>Active Tasks</h3>
+                <div class="value" id="activeTasks">0</div>
+            </div>
         </div>
 
-        <div class="content" id="mainContent">
-            <div id="alertContainer"></div>
+        <div class="config-section">
+            <h2>⚙️ Worker Configuration</h2>
+            
+            <div id="successMessage" class="success-message"></div>
+            <div id="errorMessage" class="error-message"></div>
 
-            <!-- Statistics -->
-            <div class="stats-grid" id="statsGrid">
-                <div class="stat-card">
-                    <h3>Queue Status</h3>
-                    <div class="value" id="queueStatus">-</div>
-                </div>
-                <div class="stat-card">
-                    <h3>Total Workers</h3>
-                    <div class="value" id="totalWorkers">-</div>
-                </div>
-                <div class="stat-card">
-                    <h3>Active Tasks</h3>
-                    <div class="value" id="activeTasks">-</div>
-                </div>
-                <div class="stat-card">
-                    <h3>Total Models</h3>
-                    <div class="value" id="totalModels">-</div>
-                </div>
+            <div class="form-group">
+                <label for="workerConcurrency">Worker Concurrency</label>
+                <input type="number" id="workerConcurrency" min="1" max="500">
             </div>
 
-            <!-- Worker Configuration -->
-            <div class="section">
-                <div class="section-header">
-                    <h2 class="section-title">⚙️ Worker Configuration</h2>
-                </div>
-                <div class="form-group">
-                    <label>Total Worker Concurrency</label>
-                    <input type="number" id="workerConcurrency" min="1" max="1000">
-                    <small style="color: #666;">Number of concurrent workers to process tasks</small>
-                </div>
+            <div class="form-group">
+                <label for="maxConcurrentRequests">Max Concurrent Requests (Global)</label>
+                <input type="number" id="maxConcurrentRequests" min="1" max="1000">
             </div>
 
-            <!-- Global Settings -->
-            <div class="section">
-                <div class="section-header">
-                    <h2 class="section-title">🌐 Global Settings</h2>
-                </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Initial Retry Delay (seconds)</label>
-                        <input type="number" id="initialRetryDelay" step="0.1" min="0.1">
-                    </div>
-                    <div class="form-group">
-                        <label>Max Retry Delay (seconds)</label>
-                        <input type="number" id="maxRetryDelay" min="1">
-                    </div>
-                    <div class="form-group">
-                        <label>Max Retries</label>
-                        <input type="number" id="maxRetries" min="1">
-                    </div>
-                </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>TTFT Threshold (seconds)</label>
-                        <input type="number" id="ttftThreshold" step="0.1" min="0.1">
-                    </div>
-                    <div class="form-group">
-                        <label>Request Timeout (seconds)</label>
-                        <input type="number" id="requestTimeout" min="1">
-                    </div>
-                </div>
-            </div>
+            <button class="btn" onclick="updateWorkerConfig()">💾 Save Worker Settings</button>
+            <button class="btn btn-secondary" onclick="reloadConfig()">🔄 Reload from File</button>
+        </div>
 
-            <!-- Models Configuration -->
-            <div class="section">
-                <div class="section-header">
-                    <h2 class="section-title">🤖 Model Configuration</h2>
-                    <button onclick="addModel()" class="btn btn-success">+ Add Model</button>
-                </div>
-                <div id="modelsContainer"></div>
-            </div>
+        <div class="config-section">
+            <h2>📊 Model Performance</h2>
+            <div id="modelMetrics" class="model-list"></div>
+        </div>
 
-            <!-- Action Buttons -->
-            <div class="button-group" style="margin-top: 30px;">
-                <button onclick="saveConfiguration()" class="btn btn-primary">💾 Save Configuration</button>
-                <button onclick="reloadConfiguration()" class="btn btn-secondary">🔄 Reload from File</button>
-                <button onclick="refreshStats()" class="btn btn-secondary">📊 Refresh Stats</button>
-            </div>
+        <div class="config-section">
+            <h2>🤖 Model Configuration</h2>
+            <div id="modelList" class="model-list"></div>
         </div>
     </div>
-
+    
     <script>
-        let authToken = '';
         let currentConfig = null;
+        let API_TOKEN = localStorage.getItem('api_token');
 
-        async function authenticate() {
-            const token = document.getElementById('apiToken').value.trim();
+        function authenticate() {
+            const token = document.getElementById('authToken').value.trim();
             if (!token) {
-                showAlert('Please enter an API token', 'error');
+                alert('Please enter a valid token');
                 return;
             }
+            
+            API_TOKEN = token;
+            localStorage.setItem('api_token', token);
+            document.getElementById('authModal').classList.remove('active');
+            
+            // Initialize after authentication
+            initialize();
+        }
 
-            authToken = token;
-            localStorage.setItem('apiToken', token);
-
+        async function initialize() {
             try {
-                await loadConfiguration();
-                document.getElementById('authSection').style.display = 'none';
-                document.getElementById('mainContent').classList.add('visible');
-                showAlert('Authentication successful', 'success');
-                refreshStats();
-                setInterval(refreshStats, 5000); // Auto-refresh every 5 seconds
+                await loadConfig();
+                await refreshStats();
+                setInterval(refreshStats, 5000);
             } catch (error) {
-                showAlert('Authentication failed: ' + error.message, 'error');
-                authToken = '';
-                localStorage.removeItem('apiToken');
+                console.error('Initialization failed:', error);
             }
         }
 
-        async function loadConfiguration() {
-            const response = await fetch('/api/config', {
-                headers: {
-                    'Authorization': `Bearer ${authToken}`
+        async function loadConfig() {
+            if (!API_TOKEN) return;
+            
+            try {
+                const response = await fetch('/api/config', {
+                    headers: {
+                        'Authorization': `Bearer ${API_TOKEN}`
+                    }
+                });
+                
+                if (response.status === 401) {
+                    localStorage.removeItem('api_token');
+                    API_TOKEN = null;
+                    document.getElementById('authModal').classList.add('active');
+                    showError('Invalid token. Please try again.');
+                    return;
                 }
-            });
-
-            if (!response.ok) {
-                throw new Error('Failed to load configuration');
+                
+                if (!response.ok) throw new Error('Failed to load config');
+                
+                currentConfig = await response.json();
+                populateForm();
+            } catch (error) {
+                showError('Failed to load configuration: ' + error.message);
             }
-
-            currentConfig = await response.json();
-            populateForm();
         }
 
         function populateForm() {
-            // Worker settings
+            if (!currentConfig) return;
+            
             document.getElementById('workerConcurrency').value = 
                 currentConfig.worker?.concurrency || 200;
-
-            // Global settings
-            document.getElementById('initialRetryDelay').value = 
-                currentConfig.concurrency?.initial_retry_delay || 1.0;
-            document.getElementById('maxRetryDelay').value = 
-                currentConfig.concurrency?.max_retry_delay || 60.0;
-            document.getElementById('maxRetries').value = 
-                currentConfig.concurrency?.max_retries || 5;
-            document.getElementById('ttftThreshold').value = 
-                currentConfig.load_monitoring?.ttft_threshold || 5.0;
-            document.getElementById('requestTimeout').value = 
-                currentConfig.load_monitoring?.request_timeout || 120.0;
-
-            // Models
+            
+            document.getElementById('maxConcurrentRequests').value = 
+                currentConfig.concurrency?.max_concurrent_requests || 100;
+            
             renderModels();
         }
 
         function renderModels() {
-            const container = document.getElementById('modelsContainer');
-            container.innerHTML = '';
-
-            currentConfig.models_to_run?.forEach((model, index) => {
-                container.innerHTML += createModelCard(model, index);
-            });
-        }
-
-        function createModelCard(model, index) {
-            return `
-                <div class="model-card" id="model-${index}">
-                    <div class="model-header">
-                        <div class="model-name">${model.name}</div>
-                        <button onclick="removeModel(${index})" class="btn btn-danger">Remove</button>
-                    </div>
-                    <div class="form-row">
+            const container = document.getElementById('modelList');
+            if (!currentConfig || !currentConfig.models_to_run || currentConfig.models_to_run.length === 0) {
+                container.innerHTML = '<p style="color: #666; text-align: center; padding: 20px;">No models configured</p>';
+                return;
+            }
+            
+            container.innerHTML = currentConfig.models_to_run.map((model, index) => `
+                <div class="model-item">
+                    <h4>${model.name}</h4>
+                    <div class="model-controls">
                         <div class="form-group">
-                            <label>Model Name</label>
-                            <input type="text" value="${model.name}" 
-                                   onchange="updateModelField(${index}, 'name', this.value)">
-                        </div>
-                        <div class="form-group">
-                            <label>Max Concurrent Requests</label>
+                            <label>Max Concurrent</label>
                             <input type="number" value="${model.concurrency?.max_concurrent_requests || 10}" 
-                                   onchange="updateModelField(${index}, 'max_concurrent_requests', parseInt(this.value))" min="0">
+                                   onchange="updateModel(${index}, 'max_concurrent_requests', this.value)">
                         </div>
                         <div class="form-group">
-                            <label>Min Concurrent Requests</label>
+                            <label>Min Concurrent</label>
                             <input type="number" value="${model.concurrency?.min_concurrent_requests || 0}" 
-                                   onchange="updateModelField(${index}, 'min_concurrent_requests', parseInt(this.value))" min="0">
+                                   onchange="updateModel(${index}, 'min_concurrent_requests', this.value)">
                         </div>
-                        <div class="form-group">
-                            <label>Recovery Threshold</label>
-                            <input type="number" value="${model.concurrency?.recover_threshold || 100}" 
-                                   onchange="updateModelField(${index}, 'recover_threshold', parseInt(this.value))" min="0">
-                        </div>
-                    </div>
-                    <div class="form-row">
                         <div class="form-group">
                             <label>Temperature</label>
                             <input type="number" step="0.1" value="${model.generation?.temperature || 0.7}" 
-                                   onchange="updateModelField(${index}, 'temperature', parseFloat(this.value))" min="0" max="2">
+                                   onchange="updateModel(${index}, 'temperature', this.value)">
                         </div>
                         <div class="form-group">
-                            <label>Top P</label>
-                            <input type="number" step="0.05" value="${model.generation?.top_p || 0.8}" 
-                                   onchange="updateModelField(${index}, 'top_p', parseFloat(this.value))" min="0" max="1">
-                        </div>
-                        <div class="form-group">
-                            <label>Max Completion Tokens</label>
+                            <label>Max Tokens</label>
                             <input type="number" value="${model.generation?.max_completion_tokens || 8196}" 
-                                   onchange="updateModelField(${index}, 'max_completion_tokens', parseInt(this.value))" min="1">
-                        </div>
-                        <div class="form-group">
-                            <label>Seed</label>
-                            <input type="number" value="${model.generation?.seed || 1}" 
-                                   onchange="updateModelField(${index}, 'seed', parseInt(this.value))" min="0">
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <div class="checkbox-group">
-                            <input type="checkbox" id="stream-${index}" 
-                                   ${model.generation?.stream ? 'checked' : ''}
-                                   onchange="updateModelField(${index}, 'stream', this.checked)">
-                            <label for="stream-${index}" style="margin: 0;">Enable Streaming</label>
+                                   onchange="updateModel(${index}, 'max_completion_tokens', this.value)">
                         </div>
                     </div>
                 </div>
-            `;
+            `).join('');
         }
 
-        function updateModelField(index, field, value) {
+        function updateModel(index, field, value) {
+            if (!currentConfig) return;
+            
             const model = currentConfig.models_to_run[index];
+            if (!model) return;
             
-            if (field === 'name') {
-                model.name = value;
-            } else if (['max_concurrent_requests', 'min_concurrent_requests', 'recover_threshold'].includes(field)) {
-                model.concurrency[field] = value;
+            if (['max_concurrent_requests', 'min_concurrent_requests'].includes(field)) {
+                if (!model.concurrency) model.concurrency = {};
+                model.concurrency[field] = parseInt(value);
             } else {
-                model.generation[field] = value;
+                if (!model.generation) model.generation = {};
+                model.generation[field] = field === 'temperature' ? parseFloat(value) : parseInt(value);
             }
         }
 
-        function addModel() {
-            const newModel = {
-                name: "new-model",
-                concurrency: {
-                    max_concurrent_requests: 10,
-                    min_concurrent_requests: 0,
-                    recover_threshold: 100
-                },
-                generation: {
-                    stream: true,
-                    max_completion_tokens: 8196,
-                    temperature: 0.7,
-                    top_p: 0.8,
-                    seed: 1
-                }
-            };
+        async function updateWorkerConfig() {
+            if (!API_TOKEN) return;
             
-            currentConfig.models_to_run.push(newModel);
-            renderModels();
-            showAlert('Model added. Remember to save configuration.', 'success');
-        }
-
-        function removeModel(index) {
-            if (confirm('Are you sure you want to remove this model?')) {
-                currentConfig.models_to_run.splice(index, 1);
-                renderModels();
-                showAlert('Model removed. Remember to save configuration.', 'success');
-            }
-        }
-
-        async function saveConfiguration() {
-            const payload = {
-                models_to_run: currentConfig.models_to_run,
-                worker: {
-                    concurrency: parseInt(document.getElementById('workerConcurrency').value)
-                },
-                concurrency: {
-                    initial_retry_delay: parseFloat(document.getElementById('initialRetryDelay').value),
-                    max_retry_delay: parseFloat(document.getElementById('maxRetryDelay').value),
-                    max_retries: parseInt(document.getElementById('maxRetries').value)
-                },
-                load_monitoring: {
-                    ttft_threshold: parseFloat(document.getElementById('ttftThreshold').value),
-                    request_timeout: parseFloat(document.getElementById('requestTimeout').value)
-                }
-            };
-
             try {
+                const payload = {
+                    worker: {
+                        concurrency: parseInt(document.getElementById('workerConcurrency').value)
+                    },
+                    concurrency: {
+                        max_concurrent_requests: parseInt(document.getElementById('maxConcurrentRequests').value)
+                    }
+                };
+
                 const response = await fetch('/api/config', {
                     method: 'PUT',
                     headers: {
-                        'Authorization': `Bearer ${authToken}`,
+                        'Authorization': `Bearer ${API_TOKEN}`,
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify(payload)
                 });
 
-                if (!response.ok) {
-                    throw new Error('Failed to save configuration');
+                if (response.status === 401) {
+                    localStorage.removeItem('api_token');
+                    location.reload();
+                    return;
                 }
 
-                const result = await response.json();
-                showAlert('Configuration saved successfully! Changes are now active.', 'success');
-                await loadConfiguration();
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to update config');
+                }
+                
+                showSuccess('Configuration updated successfully!');
+                await loadConfig();
             } catch (error) {
-                showAlert('Failed to save configuration: ' + error.message, 'error');
+                showError('Failed to update configuration: ' + error.message);
             }
         }
 
-        async function reloadConfiguration() {
-            if (!confirm('This will reload configuration from the YAML file. Any unsaved changes will be lost. Continue?')) {
-                return;
-            }
-
+        async function reloadConfig() {
+            if (!API_TOKEN) return;
+            
             try {
                 const response = await fetch('/api/config/reload', {
                     method: 'POST',
                     headers: {
-                        'Authorization': `Bearer ${authToken}`
+                        'Authorization': `Bearer ${API_TOKEN}`
                     }
                 });
 
-                if (!response.ok) {
-                    throw new Error('Failed to reload configuration');
+                if (response.status === 401) {
+                    localStorage.removeItem('api_token');
+                    location.reload();
+                    return;
                 }
 
-                showAlert('Configuration reloaded from file', 'success');
-                await loadConfiguration();
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to reload config');
+                }
+                
+                const result = await response.json();
+                showSuccess(result.message || 'Configuration reloaded from file!');
+                await loadConfig();
             } catch (error) {
-                showAlert('Failed to reload configuration: ' + error.message, 'error');
+                showError('Failed to reload configuration: ' + error.message);
             }
         }
 
         async function refreshStats() {
+            if (!API_TOKEN) return;
+            
             try {
-                // Get queue stats
-                const statsResponse = await fetch('/stats', {
-                    headers: {
-                        'Authorization': `Bearer ${authToken}`
-                    }
-                });
-                const stats = await statsResponse.json();
+                const [statsRes, workersRes, metricsRes] = await Promise.all([
+                    fetch('/stats', {
+                        headers: { 'Authorization': `Bearer ${API_TOKEN}` }
+                    }),
+                    fetch('/api/workers/status', {
+                        headers: { 'Authorization': `Bearer ${API_TOKEN}` }
+                    }),
+                    fetch('/api/metrics', {
+                        headers: { 'Authorization': `Bearer ${API_TOKEN}` }
+                    })
+                ]);
 
-                // Get worker status
-                const workerResponse = await fetch('/api/workers/status', {
-                    headers: {
-                        'Authorization': `Bearer ${authToken}`
-                    }
-                });
-                const workers = await workerResponse.json();
+                if (statsRes.status === 401 || workersRes.status === 401 || metricsRes.status === 401) {
+                    localStorage.removeItem('api_token');
+                    location.reload();
+                    return;
+                }
 
-                // Update UI
-                document.getElementById('queueStatus').textContent = 
-                    `${stats.queue_stats?.pending || 0} pending`;
-                document.getElementById('totalWorkers').textContent = workers.total_workers;
-                document.getElementById('activeTasks').textContent = workers.active_tasks;
-                document.getElementById('totalModels').textContent = workers.models?.length || 0;
+                const stats = await statsRes.json();
+                const workers = await workersRes.json();
+                const metrics = await metricsRes.json();
+
+                // Update overview metrics
+                document.getElementById('rpmSent').textContent = metrics.overview?.rpm_sent?.toFixed(1) || '0.0';
+                document.getElementById('rpmCompleted').textContent = metrics.overview?.rpm_completed?.toFixed(1) || '0.0';
+                document.getElementById('avgLatency').textContent = `${metrics.overview?.avg_latency_seconds?.toFixed(2) || '0.00'}s`;
+                document.getElementById('successRate').textContent = `${metrics.overview?.success_rate?.toFixed(1) || '0.0'}%`;
+                document.getElementById('uptime').textContent = `${metrics.overview?.uptime_hours?.toFixed(1) || '0.0'}h`;
+                document.getElementById('rateLimits').textContent = metrics.overview?.total_rate_limits || '0';
+                
+                // Update queue and worker stats
+                document.getElementById('queueStatus').textContent = `${stats.queue_stats?.pending || 0} pending`;
+                document.getElementById('activeTasks').textContent = stats.queue_stats?.processing || 0;
+
+                // Render model metrics
+                if (metrics.models) {
+                    renderModelMetrics(metrics.models);
+                }
             } catch (error) {
                 console.error('Failed to refresh stats:', error);
+                
+                // Set default values on error
+                const elements = [
+                    'rpmSent', 'rpmCompleted', 'avgLatency', 'successRate', 
+                    'uptime', 'rateLimits', 'queueStatus', 'activeTasks'
+                ];
+                
+                elements.forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el && el.textContent === 'Loading...') {
+                        el.textContent = '0';
+                    }
+                });
             }
         }
 
-        function showAlert(message, type) {
-            const container = document.getElementById('alertContainer');
-            const alertClass = type === 'success' ? 'alert-success' : 'alert-error';
-            
-            container.innerHTML = `
-                <div class="alert ${alertClass}">
-                    ${message}
+        function renderModelMetrics(modelMetrics) {
+            const container = document.getElementById('modelMetrics');
+            if (!modelMetrics || Object.keys(modelMetrics).length === 0) {
+                container.innerHTML = '<p style="color: #666; text-align: center; padding: 20px;">No model metrics available yet. Metrics will appear after processing requests.</p>';
+                return;
+            }
+
+            container.innerHTML = Object.entries(modelMetrics).map(([modelName, metrics]) => `
+                <div class="model-item">
+                    <h4>${modelName}</h4>
+                    <div class="model-controls">
+                        <div class="stat-item">
+                            <label>RPM</label>
+                            <div class="value">${metrics.rpm?.toFixed(1) || '0.0'}</div>
+                        </div>
+                        <div class="stat-item">
+                            <label>Avg Latency</label>
+                            <div class="value">${metrics.avg_latency?.toFixed(2) || '0.00'}s</div>
+                        </div>
+                        <div class="stat-item">
+                            <label>Success Rate</label>
+                            <div class="value">${metrics.success_rate?.toFixed(1) || '0.0'}%</div>
+                        </div>
+                        <div class="stat-item">
+                            <label>Total Sent</label>
+                            <div class="value">${metrics.total_sent || 0}</div>
+                        </div>
+                        <div class="stat-item">
+                            <label>Completed</label>
+                            <div class="value">${metrics.total_completed || 0}</div>
+                        </div>
+                        <div class="stat-item">
+                            <label>Failed</label>
+                            <div class="value">${metrics.total_failed || 0}</div>
+                        </div>
+                        <div class="stat-item">
+                            <label>Rate Limits (Recent)</label>
+                            <div class="value">${metrics.rate_limits_recent || 0}</div>
+                        </div>
+                        <div class="stat-item">
+                            <label>Rate Limits (Total)</label>
+                            <div class="value">${metrics.rate_limits || 0}</div>
+                        </div>
+                    </div>
                 </div>
-            `;
-
-            setTimeout(() => {
-                container.innerHTML = '';
-            }, 5000);
+            `).join('');
         }
 
-        // Check for saved token on load
-        window.addEventListener('DOMContentLoaded', () => {
-            const savedToken = localStorage.getItem('apiToken');
-            if (savedToken) {
-                document.getElementById('apiToken').value = savedToken;
-                authenticate();
-            }
-        });
+        function showSuccess(message) {
+            const el = document.getElementById('successMessage');
+            el.textContent = message;
+            el.style.display = 'block';
+            setTimeout(() => el.style.display = 'none', 5000);
+        }
+
+        function showError(message) {
+            const el = document.getElementById('errorMessage');
+            el.textContent = message;
+            el.style.display = 'block';
+            setTimeout(() => el.style.display = 'none', 5000);
+        }
+
+        // Initialize if token exists
+        if (API_TOKEN) {
+            document.getElementById('authModal').classList.remove('active');
+            initialize();
+        }
     </script>
 </body>
 </html>
