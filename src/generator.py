@@ -283,11 +283,25 @@ async def process_single_item(
     conversation_history = []
     final_generated_conversation = []
 
+    # ✅ Extract system prompt if present and add it FIRST
+    system_prompt = None
+    for turn in item["conversations"]:
+        if turn.get("from") == "system":
+            system_prompt = turn.get("value")
+            break
+    
+    if system_prompt:
+        conversation_history.append({"role": "system", "content": system_prompt})
+        final_generated_conversation.append({"from": "system", "value": system_prompt})
+        logging.info(f"Added system prompt to conversation: {system_prompt[:100]}...")
+
+    # ✅ Extract human prompts (excluding system)
     human_prompts = [turn["value"] for turn in item["conversations"] if turn.get("from") == "human"]
     if not human_prompts:
         logging.warning(f"Skipping item as no 'human' turn was found: {item}")
         return {"success": False, "error": "No human prompts found"}
 
+    # ✅ Process each human turn
     for prompt in human_prompts:
         conversation_history.append({"role": "user", "content": prompt})
         final_generated_conversation.append({"from": "human", "value": prompt})
@@ -304,17 +318,11 @@ async def process_single_item(
             logging.error(f"Failed to get response for a turn. Halting generation for this item. Error: {error_msg}")
             return {"success": False, "error": f"Generation failed for item: {error_msg}"}
 
+    item["model"] = model_name
+    item["conversations"] = final_generated_conversation
     return {
         "success": True,
-        "result": {
-            "id": item.get("id", "unknown"),
-            "conversations": final_generated_conversation,
-            "label": item.get("label", "unknown"),
-            "langdetect": item.get("langdetect", "unknown"),
-            "source": item.get("source", "unknown"),
-            "reward": item.get("reward", 0),
-            "model": model_name
-        }
+        "result": item
     }
 
 # --- Main Batch Processing Loop ---

@@ -33,9 +33,11 @@ class AsyncSynthGenClient:
         self.base_url = base_url
         self.poll_interval = poll_interval
         self.request_timeout = request_timeout
+        limits = httpx.Limits(max_connections=200, max_keepalive_connections=50)
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
-            timeout=httpx.Timeout(30.0, connect=10.0)
+            timeout=httpx.Timeout(timeout=self.request_timeout, pool=60, connect=10.0),
+            limits=limits,
         )
 
     async def __aenter__(self):
@@ -43,6 +45,49 @@ class AsyncSynthGenClient:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self._client.aclose()
+
+    async def _submit_job(
+        self,
+        conversations: List[Dict[str, str]],
+        model: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """Submits a job and returns the request_id immediately."""
+        try:
+            request_payload = {"conversations": conversations, "model": model, "metadata": metadata}
+            response = await self._client.post("/generate", json=request_payload)
+            response.raise_for_status()
+            return response.json().get("request_id")
+        except httpx.RequestError as e:
+            raise ServerNotReachableError(f"Failed to submit job: {e}") from e
+
+    async def _poll_for_result(self, request_id: str) -> Dict[str, Any]:
+        """Polls for a specific request_id until completion."""
+        start_time = asyncio.get_event_loop().time()
+        
+        while (asyncio.get_event_loop().time() - start_time) < self.request_timeout:
+            try:
+                result_response = await self._client.get(f"/result/{request_id}")
+
+                if result_response.status_code == 200:
+                    return result_response.json()
+                elif result_response.status_code == 500:
+                    error_details = result_response.json()
+                    raise GenerationFailedError(
+                        f"Task {request_id} failed on server", 
+                        details=error_details
+                    )
+                elif result_response.status_code == 202:
+                    # Still processing, wait and retry
+                    await asyncio.sleep(self.poll_interval)
+                else:
+                    result_response.raise_for_status()
+                    
+            except httpx.RequestError as e:
+                logging.warning(f"Polling error for {request_id}: {e}. Retrying...")
+                await asyncio.sleep(self.poll_interval)
+        
+        raise PollingTimeoutError(f"Polling for {request_id} timed out after {self.request_timeout}s")
 
     async def generate(
         self,
@@ -53,56 +98,68 @@ class AsyncSynthGenClient:
         """
         Submits a single generation job and waits for the final result.
         """
-        try:
-            request_payload = {"conversations": conversations, "model": model, "metadata": metadata}
-            response = await self._client.post("/generate", json=request_payload)
-            response.raise_for_status()
-            request_id = response.json().get("request_id")
-
-            start_time = asyncio.get_event_loop().time()
-            while (asyncio.get_event_loop().time() - start_time) < self.request_timeout:
-                result_response = await self._client.get(f"/result/{request_id}")
-
-                if result_response.status_code == 200:
-                    return result_response.json()
-                elif result_response.status_code == 500:
-                    raise GenerationFailedError("Generation task failed on the server.", details=result_response.json())
-                elif result_response.status_code == 202:
-                    await asyncio.sleep(self.poll_interval)
-                else:
-                    result_response.raise_for_status()
-            
-            raise PollingTimeoutError(f"Polling for request {request_id} timed out after {self.request_timeout}s.")
-
-        except httpx.RequestError as e:
-            raise ServerNotReachableError(f"Failed to connect to the API server: {e}") from e
+        request_id = await self._submit_job(conversations, model, metadata)
+        return await self._poll_for_result(request_id)
 
     async def generate_batch(
         self,
         items: List[Dict[str, Any]],
         max_concurrency: int,
-        model: Optional[str] = None
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
-        Processes a batch of items concurrently and yields results as they complete.
+        ✅ OPTIMIZED: Submits ALL jobs first, then polls concurrently.
+        This achieves true parallelism instead of sequential processing.
         """
-        semaphore = asyncio.Semaphore(max_concurrency)
-
-        async def _process_one(item):
-            async with semaphore:
+        # Phase 1: Submit ALL jobs as fast as possible
+        logging.info(f"Submitting {len(items)} jobs to server...")
+        submission_semaphore = asyncio.Semaphore(max_concurrency)
+        
+        async def _submit_with_limit(item):
+            async with submission_semaphore:
                 try:
-                    return await self.generate(
+                    request_id = await self._submit_job(
                         conversations=item["conversations"],
-                        model=model,
-                        metadata={"id": item.get("id")}
+                        model=item.get("model"),
+                        metadata=item.get("metadata", {})
                     )
+                    return (request_id, item)
                 except Exception as e:
-                    logging.error(f"Error processing item {item.get('id', 'unknown')}: {e}")
+                    logging.error(f"Failed to submit item {item.get('id', 'unknown')}: {e}")
+                    return (None, item)
+        
+        # Submit all jobs concurrently
+        submission_tasks = [asyncio.create_task(_submit_with_limit(item)) for item in items]
+        submitted_jobs = []
+        
+        for future in tqdm(asyncio.as_completed(submission_tasks), total=len(items), desc="Submitting jobs"):
+            request_id, item = await future
+            if request_id:
+                submitted_jobs.append((request_id, item))
+        
+        logging.info(f"✅ Submitted {len(submitted_jobs)}/{len(items)} jobs successfully")
+        
+        # Phase 2: Poll for ALL results concurrently
+        logging.info(f"Polling for {len(submitted_jobs)} results...")
+        polling_semaphore = asyncio.Semaphore(max_concurrency)
+        
+        async def _poll_with_limit(request_id, item):
+            async with polling_semaphore:
+                try:
+                    result = await self._poll_for_result(request_id)
+                    # Merge original item metadata with result
+                    result["original_metadata"] = item.get("metadata", {})
+                    return result
+                except Exception as e:
+                    logging.error(f"Failed to get result for {request_id}: {e}")
                     return None
-
-        tasks = [asyncio.create_task(_process_one(item)) for item in items]
-
-        for future in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Processing batch"):
+        
+        # Poll for all results concurrently
+        polling_tasks = [
+            asyncio.create_task(_poll_with_limit(req_id, item)) 
+            for req_id, item in submitted_jobs
+        ]
+        
+        for future in tqdm(asyncio.as_completed(polling_tasks), total=len(submitted_jobs), desc="Fetching results"):
             result = await future
             if result:
                 yield result
